@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Camera, Loader2, Plus, Trash2, UserPlus, X } from "lucide-react";
+import { Camera, Loader2, Plus, Power, PowerOff, Trash2, UserPlus, Video, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
