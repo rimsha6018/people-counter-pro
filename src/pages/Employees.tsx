@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { detectSingleFace, loadFaceModels } from "@/lib/faceRecognition";
+import { detectFaceBox, detectSingleFace, loadFaceDetectionModel, loadFaceModels } from "@/lib/faceRecognition";
 
 interface Employee {
   id: string;
@@ -55,7 +55,7 @@ export default function EmployeesPage() {
       return;
     }
     setEmployees(
-      (data ?? []).map((e: any) => ({
+      ((data ?? []) as Employee[]).map((e) => ({
         ...e,
         face_descriptors: Array.isArray(e.face_descriptors) ? e.face_descriptors : [],
       })),
@@ -149,6 +149,11 @@ export default function EmployeesPage() {
 }
 
 type CameraStatus = "idle" | "loading" | "ready" | "error" | "denied";
+type BoxLike = { x: number; y: number; width: number; height: number };
+type FaceDetectionLike = { box?: BoxLike; detection?: { box?: BoxLike } };
+type FaceDescriptorResult = FaceDetectionLike & { descriptor: Float32Array };
+
+const getDetectionBox = (detection?: FaceDetectionLike | null) => detection?.detection?.box ?? detection?.box;
 
 function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -156,6 +161,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(true);
   const detectionLoopRef = useRef<number | null>(null);
+  const detectionBusyRef = useRef(false);
   const captureLockRef = useRef(false);
   const lastAutoCaptureRef = useRef(0);
   const countdownStartedRef = useRef<number | null>(null);
@@ -172,29 +178,45 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [countdown, setCountdown] = useState<number | null>(null);
   const [faceHint, setFaceHint] = useState("Center your face");
 
-  const captureFaceImage = (video: HTMLVideoElement, detection?: any) => {
+  const captureFaceImage = (source: HTMLVideoElement | HTMLCanvasElement, detection?: FaceDetectionLike | null) => {
     const canvas = document.createElement("canvas");
     canvas.width = 360;
     canvas.height = 360;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
-    const box = detection?.detection?.box;
+    const vw = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+    const vh = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+    const box = getDetectionBox(detection);
     if (box && vw > 0 && vh > 0) {
       const size = Math.min(Math.max(box.width, box.height) * 1.8, Math.min(vw, vh));
       const sx = Math.max(0, Math.min(vw - size, box.x + box.width / 2 - size / 2));
       const sy = Math.max(0, Math.min(vh - size, box.y + box.height / 2 - size / 2));
-      ctx.drawImage(video, sx, sy, size, size, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(source, sx, sy, size, size, 0, 0, canvas.width, canvas.height);
     } else {
       const size = Math.min(vw, vh);
-      ctx.drawImage(video, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(source, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, canvas.width, canvas.height);
     }
     return canvas.toDataURL("image/jpeg", 0.82);
   };
 
-  const drawFaceBox = useCallback((box?: { x: number; y: number; width: number; height: number }) => {
+  const makeDetectionSnapshot = (video: HTMLVideoElement) => {
+    const canvas = document.createElement("canvas");
+    const maxWidth = 360;
+    const scale = Math.min(1, maxWidth / Math.max(video.videoWidth, 1));
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  };
+
+  const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string) =>
+    Promise.race<T>([
+      promise,
+      new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(label)), ms)),
+    ]);
+
+  const drawFaceBox = useCallback((box?: BoxLike) => {
     const canvas = overlayRef.current;
     const video = videoRef.current;
     const ctx = canvas?.getContext("2d");
@@ -215,16 +237,25 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     ctx.strokeRect(box.x, box.y, box.width, box.height);
   }, []);
 
-  const isFaceCentered = (video: HTMLVideoElement, detection: any) => {
-    const box = detection?.detection?.box;
-    if (!box || video.videoWidth === 0 || video.videoHeight === 0) return false;
+  const isFaceCentered = (source: HTMLVideoElement | HTMLCanvasElement, detection: FaceDetectionLike | null | undefined) => {
+    const box = getDetectionBox(detection);
+    const width = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+    const height = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+    if (!box || width === 0 || height === 0) return false;
     const centerX = box.x + box.width / 2;
     const centerY = box.y + box.height / 2;
-    const withinX = Math.abs(centerX - video.videoWidth / 2) < video.videoWidth * 0.2;
-    const withinY = Math.abs(centerY - video.videoHeight / 2) < video.videoHeight * 0.22;
-    const bigEnough = box.width > video.videoWidth * 0.16 && box.height > video.videoHeight * 0.22;
+    const withinX = Math.abs(centerX - width / 2) < width * 0.2;
+    const withinY = Math.abs(centerY - height / 2) < height * 0.22;
+    const bigEnough = box.width > width * 0.16 && box.height > height * 0.22;
     return withinX && withinY && bigEnough;
   };
+
+  const scaleBox = (box: BoxLike, from: HTMLCanvasElement, to: HTMLVideoElement) => ({
+    x: box.x * (to.videoWidth / from.width),
+    y: box.y * (to.videoHeight / from.height),
+    width: box.width * (to.videoWidth / from.width),
+    height: box.height * (to.videoHeight / from.height),
+  });
 
   const clearOverlay = useCallback(() => {
     const canvas = overlayRef.current;
@@ -310,8 +341,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         await waitForVideo(v);
       }
       setStatus("ready");
-    } catch (err: any) {
-      const name = err?.name ?? "";
+    } catch (err: unknown) {
+      const name = err instanceof DOMException ? err.name : "";
       let msg = "Could not start camera.";
       if (name === "NotAllowedError" || name === "SecurityError") {
         msg = "Permission denied. Allow camera access in your browser settings and try again.";
@@ -333,7 +364,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   // Auto-start on mount + cleanup on unmount
   useEffect(() => {
     mountedRef.current = true;
-    // Pre-warm face models in parallel so first capture isn't slow
+    // Pre-warm face models in parallel so first capture isn't slow, without blocking camera startup.
+    loadFaceDetectionModel().catch(() => {});
     loadFaceModels().catch(() => {});
     startCamera();
     return () => {
@@ -342,7 +374,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     };
   }, [startCamera, stopCamera]);
 
-  const capture = useCallback(async (source: "manual" | "auto" = "manual", existingResult?: any) => {
+  const capture = useCallback(async (source: "manual" | "auto" = "manual", existingResult?: FaceDescriptorResult) => {
     const v = videoRef.current;
     if (!v || status !== "ready") return;
     if (captureLockRef.current) return;
@@ -353,21 +385,29 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     captureLockRef.current = true;
     setCapturing(true);
     try {
-      // ensure models are loaded before detecting
-      await loadFaceModels();
+      setFaceHint("Capturing sample...");
+      const snapshot = makeDetectionSnapshot(v);
+      // Keep the capture action bounded so the button never buffers indefinitely.
+      await withTimeout(loadFaceModels(), 1800, "Face model loading timed out");
       setModelsReady(true);
-      const result = existingResult ?? (await detectSingleFace(v));
+      const result = existingResult?.descriptor
+        ? existingResult
+        : await withTimeout(detectSingleFace(snapshot), 1200, "Face capture timed out");
       if (!result) {
         if (source === "manual") toast.error("No face detected. Look straight at the camera.");
       } else {
-        const image = captureFaceImage(v, result);
+        const image = captureFaceImage(snapshot, result);
         if (image) setFaceImage(image);
         setDescriptors((d) => [...d, Array.from(result.descriptor)]);
+        setFaceHint("Sample captured");
         toast.success(source === "auto" ? "Face auto-captured" : `Captured sample ${descriptorsCountRef.current + 1}`);
       }
-    } catch (e: any) {
-      const msg = String(e?.message ?? e);
-      if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("timed out")) {
+        setFaceHint("Capture timed out — try again");
+        toast.error("Capture took too long. Keep your face centered and try again.");
+      } else if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
         toast.error("Failed to load face model. Check your internet connection.");
       } else {
         toast.error("Face capture failed");
@@ -385,7 +425,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     if (status !== "ready") return;
     let cancelled = false;
 
-    loadFaceModels()
+    loadFaceDetectionModel()
       .then(() => {
         if (cancelled || status !== "ready") return;
         setModelsReady(true);
@@ -393,18 +433,20 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         drawFaceBox();
         detectionLoopRef.current = window.setInterval(async () => {
           const v = videoRef.current;
-          if (!v || v.readyState < 2 || v.paused || v.videoWidth === 0 || captureLockRef.current) return;
+          if (!v || v.readyState < 2 || v.paused || v.videoWidth === 0 || captureLockRef.current || detectionBusyRef.current) return;
+          detectionBusyRef.current = true;
           try {
-            const result = await detectSingleFace(v);
-            const box = result?.detection?.box;
-            drawFaceBox(box);
+            const snapshot = makeDetectionSnapshot(v);
+            const result = await withTimeout(detectFaceBox(snapshot), 900, "Face detection timed out");
+            const box = result?.box;
+            drawFaceBox(box ? scaleBox(box, snapshot, v) : undefined);
             if (!result) {
               countdownStartedRef.current = null;
               setCountdown(null);
               setFaceHint("No face detected");
               return;
             }
-            if (!isFaceCentered(v, result)) {
+            if (!isFaceCentered(snapshot, result)) {
               countdownStartedRef.current = null;
               setCountdown(null);
               setFaceHint("Move closer and center your face");
@@ -417,10 +459,12 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             setCountdown(Math.max(1, Math.ceil((3000 - elapsed) / 1000)));
             if (elapsed >= 3000 && now - lastAutoCaptureRef.current > 5000) {
               lastAutoCaptureRef.current = now;
-              await capture("auto", result);
+              await capture("auto");
             }
           } catch (error) {
             console.error("Face detection loop error:", error);
+          } finally {
+            detectionBusyRef.current = false;
           }
         }, 300);
       })
@@ -443,8 +487,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     try {
       nameSchema.parse(name);
       emailSchema.parse(email);
-    } catch (err: any) {
-      return toast.error(err.errors?.[0]?.message ?? "Invalid input");
+    } catch (err: unknown) {
+      return toast.error(err instanceof z.ZodError ? err.errors[0]?.message : "Invalid input");
     }
     if (descriptors.length < 1) return toast.error("Capture at least 1 face sample");
     if (!faceImage) return toast.error("Capture a face photo before saving");
@@ -456,7 +500,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       face_descriptors: descriptors,
       face_image: faceImage,
       created_by: (await supabase.auth.getUser()).data.user?.id,
-    } as any);
+    } as never);
     setSaving(false);
     if (error) return toast.error(error.message);
     toast.success("Employee registered");
