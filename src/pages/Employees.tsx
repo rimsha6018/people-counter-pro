@@ -182,7 +182,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
 
     const vw = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
     const vh = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
-    const box = detection?.detection?.box;
+    const box = detection?.detection?.box ?? detection?.box;
     if (box && vw > 0 && vh > 0) {
       const size = Math.min(Math.max(box.width, box.height) * 1.8, Math.min(vw, vh));
       const sx = Math.max(0, Math.min(vw - size, box.x + box.width / 2 - size / 2));
@@ -233,7 +233,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   }, []);
 
   const isFaceCentered = (video: HTMLVideoElement, detection: any) => {
-    const box = detection?.detection?.box;
+    const box = detection?.detection?.box ?? detection?.box;
     if (!box || video.videoWidth === 0 || video.videoHeight === 0) return false;
     const centerX = box.x + box.width / 2;
     const centerY = box.y + box.height / 2;
@@ -424,7 +424,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
           try {
             const snapshot = makeDetectionSnapshot(v);
             const result = await withTimeout(detectFaceBox(snapshot), 900, "Face detection timed out");
-            const box = result?.detection?.box;
+            const box = result?.box;
             drawFaceBox(box);
             if (!result) {
               countdownStartedRef.current = null;
@@ -445,7 +445,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             setCountdown(Math.max(1, Math.ceil((3000 - elapsed) / 1000)));
             if (elapsed >= 3000 && now - lastAutoCaptureRef.current > 5000) {
               lastAutoCaptureRef.current = now;
-              await capture("auto", result);
+              await capture("auto");
             }
           } catch (error) {
             console.error("Face detection loop error:", error);
