@@ -232,16 +232,25 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     ctx.strokeRect(box.x, box.y, box.width, box.height);
   }, []);
 
-  const isFaceCentered = (video: HTMLVideoElement, detection: any) => {
+  const isFaceCentered = (source: HTMLVideoElement | HTMLCanvasElement, detection: any) => {
     const box = detection?.detection?.box ?? detection?.box;
-    if (!box || video.videoWidth === 0 || video.videoHeight === 0) return false;
+    const width = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+    const height = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+    if (!box || width === 0 || height === 0) return false;
     const centerX = box.x + box.width / 2;
     const centerY = box.y + box.height / 2;
-    const withinX = Math.abs(centerX - video.videoWidth / 2) < video.videoWidth * 0.2;
-    const withinY = Math.abs(centerY - video.videoHeight / 2) < video.videoHeight * 0.22;
-    const bigEnough = box.width > video.videoWidth * 0.16 && box.height > video.videoHeight * 0.22;
+    const withinX = Math.abs(centerX - width / 2) < width * 0.2;
+    const withinY = Math.abs(centerY - height / 2) < height * 0.22;
+    const bigEnough = box.width > width * 0.16 && box.height > height * 0.22;
     return withinX && withinY && bigEnough;
   };
+
+  const scaleBox = (box: { x: number; y: number; width: number; height: number }, from: HTMLCanvasElement, to: HTMLVideoElement) => ({
+    x: box.x * (to.videoWidth / from.width),
+    y: box.y * (to.videoHeight / from.height),
+    width: box.width * (to.videoWidth / from.width),
+    height: box.height * (to.videoHeight / from.height),
+  });
 
   const clearOverlay = useCallback(() => {
     const canvas = overlayRef.current;
