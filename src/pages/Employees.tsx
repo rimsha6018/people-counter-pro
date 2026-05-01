@@ -151,7 +151,6 @@ export default function EmployeesPage() {
 type CameraStatus = "idle" | "loading" | "ready" | "error" | "denied";
 type BoxLike = { x: number; y: number; width: number; height: number };
 type FaceDetectionLike = { box?: BoxLike; detection?: { box?: BoxLike } };
-type FaceDescriptorResult = FaceDetectionLike & { descriptor: Float32Array };
 
 const getDetectionBox = (detection?: FaceDetectionLike | null) => detection?.detection?.box ?? detection?.box;
 
@@ -469,6 +468,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             const snapshot = makeDetectionSnapshot(v);
             const result = await withTimeout(detectFaceBox(snapshot), 900, "Face detection timed out");
             const box = result?.box;
+            if (box) lastFaceBoxRef.current = { box, at: Date.now() };
             drawFaceBox(box ? scaleBox(box, snapshot, v) : undefined);
             if (!result) {
               countdownStartedRef.current = null;
