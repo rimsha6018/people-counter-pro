@@ -238,7 +238,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       detectionLoopRef.current = null;
     }
     countdownStartedRef.current = null;
-    setCountdown(null);
+    if (mountedRef.current) setCountdown(null);
     clearOverlay();
     const s = streamRef.current;
     if (s) {
@@ -471,9 +471,9 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
 
   const statusLabel =
     status === "loading"
-      ? "Loading camera…"
+      ? "Starting camera..."
       : status === "ready"
-        ? "Camera started"
+        ? "Camera ready"
         : status === "denied"
           ? "Permission denied"
           : status === "error"
@@ -515,12 +515,21 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             playsInline
             autoPlay
           />
+          <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 h-full w-full object-cover" />
+          {status === "ready" && (
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center justify-between gap-3">
+              <Badge variant="secondary" className="font-mono">
+                {modelsReady ? faceHint : "Starting face detection..."}
+              </Badge>
+              {countdown !== null && <Badge className="text-lg font-bold">{countdown}</Badge>}
+            </div>
+          )}
           {status !== "ready" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 p-4 text-center text-sm text-muted-foreground">
               {status === "loading" ? (
                 <>
                   <Loader2 className="h-6 w-6 animate-spin" />
-                  <span>Loading camera…</span>
+                  <span>Starting camera...</span>
                 </>
               ) : status === "denied" ? (
                 <>
@@ -567,7 +576,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             </Button>
           )}
           <Button
-            onClick={capture}
+            onClick={() => capture("manual")}
             disabled={status !== "ready" || capturing}
             variant="secondary"
             className="gap-2"
@@ -576,7 +585,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             Capture sample
           </Button>
           {descriptors.length > 0 && (
-            <Button variant="ghost" onClick={() => setDescriptors([])} className="gap-1">
+            <Button variant="ghost" onClick={() => { setDescriptors([]); setFaceImage(null); }} className="gap-1">
               <X className="h-4 w-4" /> Clear
             </Button>
           )}
@@ -584,7 +593,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             <Button variant="ghost" onClick={handleClose}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving || descriptors.length === 0}>
+            <Button onClick={save} disabled={saving || descriptors.length === 0 || !faceImage}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save
             </Button>
           </div>
