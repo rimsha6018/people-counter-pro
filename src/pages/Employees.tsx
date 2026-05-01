@@ -248,6 +248,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   // Auto-start on mount + cleanup on unmount
   useEffect(() => {
     mountedRef.current = true;
+    // Pre-warm face models in parallel so first capture isn't slow
+    loadFaceModels().catch(() => {});
     startCamera();
     return () => {
       mountedRef.current = false;
