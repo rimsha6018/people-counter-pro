@@ -193,6 +193,37 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     return canvas.toDataURL("image/jpeg", 0.82);
   };
 
+  const drawFaceBox = useCallback((box?: { x: number; y: number; width: number; height: number }) => {
+    const canvas = overlayRef.current;
+    const video = videoRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !video || !ctx || video.videoWidth === 0) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "hsl(142 76% 36%)";
+    ctx.lineWidth = Math.max(4, canvas.width / 180);
+    ctx.setLineDash([18, 10]);
+    const guideSize = Math.min(canvas.width, canvas.height) * 0.55;
+    ctx.strokeRect((canvas.width - guideSize) / 2, (canvas.height - guideSize) / 2, guideSize, guideSize);
+    ctx.setLineDash([]);
+    if (!box) return;
+    ctx.strokeStyle = "hsl(210 100% 56%)";
+    ctx.lineWidth = Math.max(5, canvas.width / 160);
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+  }, []);
+
+  const isFaceCentered = (video: HTMLVideoElement, detection: any) => {
+    const box = detection?.detection?.box;
+    if (!box || video.videoWidth === 0 || video.videoHeight === 0) return false;
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+    const withinX = Math.abs(centerX - video.videoWidth / 2) < video.videoWidth * 0.2;
+    const withinY = Math.abs(centerY - video.videoHeight / 2) < video.videoHeight * 0.22;
+    const bigEnough = box.width > video.videoWidth * 0.16 && box.height > video.videoHeight * 0.22;
+    return withinX && withinY && bigEnough;
+  };
+
   const clearOverlay = useCallback(() => {
     const canvas = overlayRef.current;
     const ctx = canvas?.getContext("2d");
