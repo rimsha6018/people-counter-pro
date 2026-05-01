@@ -156,6 +156,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(true);
   const detectionLoopRef = useRef<number | null>(null);
+  const captureLockRef = useRef(false);
   const lastAutoCaptureRef = useRef(0);
   const countdownStartedRef = useRef<number | null>(null);
   const [name, setName] = useState("");
@@ -169,6 +170,28 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [modelsReady, setModelsReady] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [faceHint, setFaceHint] = useState("Center your face");
+
+  const captureFaceImage = (video: HTMLVideoElement, detection?: any) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 360;
+    canvas.height = 360;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const box = detection?.detection?.box;
+    if (box && vw > 0 && vh > 0) {
+      const size = Math.min(Math.max(box.width, box.height) * 1.8, Math.min(vw, vh));
+      const sx = Math.max(0, Math.min(vw - size, box.x + box.width / 2 - size / 2));
+      const sy = Math.max(0, Math.min(vh - size, box.y + box.height / 2 - size / 2));
+      ctx.drawImage(video, sx, sy, size, size, 0, 0, canvas.width, canvas.height);
+    } else {
+      const size = Math.min(vw, vh);
+      ctx.drawImage(video, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, canvas.width, canvas.height);
+    }
+    return canvas.toDataURL("image/jpeg", 0.82);
+  };
 
   const clearOverlay = useCallback(() => {
     const canvas = overlayRef.current;
