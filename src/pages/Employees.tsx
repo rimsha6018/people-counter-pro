@@ -196,7 +196,15 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     if (mountedRef.current) setStatus("idle");
   }, [clearOverlay]);
 
-  const startCamera = async () => {
+  const waitForVideo = (video: HTMLVideoElement) =>
+    new Promise<void>((resolve) => {
+      if (video.readyState >= 2 && video.videoWidth > 0) return resolve();
+      const done = () => resolve();
+      video.addEventListener("loadedmetadata", done, { once: true });
+      video.addEventListener("canplay", done, { once: true });
+    });
+
+  const startCamera = useCallback(async () => {
     // Must run synchronously from a user gesture (or at mount) — no awaits before getUserMedia.
     setErrorMsg("");
     setStatus("loading");
@@ -220,11 +228,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       return;
     }
 
-    // Stop any prior stream first
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
+    if (streamRef.current) stopCamera();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -241,11 +245,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         v.srcObject = stream;
         v.muted = true;
         v.playsInline = true;
-        try {
-          await v.play();
-        } catch {
-          /* autoplay can be blocked; user can press Start again */
-        }
+        await v.play();
+        await waitForVideo(v);
       }
       setStatus("ready");
     } catch (err: any) {
@@ -266,7 +267,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       setErrorMsg(msg);
       toast.error(msg);
     }
-  };
+  }, [stopCamera]);
 
   // Auto-start on mount + cleanup on unmount
   useEffect(() => {
