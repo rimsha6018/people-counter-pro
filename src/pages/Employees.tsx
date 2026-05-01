@@ -17,7 +17,13 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { detectFaceBox, detectSingleFace, loadFaceDetectionModel, loadFaceModels } from "@/lib/faceRecognition";
+import {
+  computeFaceDescriptor,
+  detectFaceBox,
+  loadFaceDetectionModel,
+  loadFaceModels,
+  loadFaceRecognitionModel,
+} from "@/lib/faceRecognition";
 
 interface Employee {
   id: string;
@@ -180,7 +186,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [countdown, setCountdown] = useState<number | null>(null);
   const [faceHint, setFaceHint] = useState("Center your face");
 
-  const captureFaceImage = (source: HTMLVideoElement | HTMLCanvasElement, detection?: FaceDetectionLike | null) => {
+  const createFaceCropCanvas = (source: HTMLVideoElement | HTMLCanvasElement, detection?: FaceDetectionLike | null) => {
     const canvas = document.createElement("canvas");
     canvas.width = 360;
     canvas.height = 360;
@@ -199,8 +205,11 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       const size = Math.min(vw, vh);
       ctx.drawImage(source, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, canvas.width, canvas.height);
     }
-    return canvas.toDataURL("image/jpeg", 0.82);
+    return canvas;
   };
+
+  const captureFaceImage = (source: HTMLVideoElement | HTMLCanvasElement, detection?: FaceDetectionLike | null) =>
+    createFaceCropCanvas(source, detection).toDataURL("image/jpeg", 0.82);
 
   const makeDetectionSnapshot = (video: HTMLVideoElement) => {
     const canvas = document.createElement("canvas");
@@ -218,12 +227,12 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(label)), ms)),
     ]);
 
-  const queueDescriptorProcessing = useCallback((snapshot: HTMLCanvasElement, source: "manual" | "auto") => {
+  const queueDescriptorProcessing = useCallback((faceCrop: HTMLCanvasElement, source: "manual" | "auto") => {
     descriptorProcessingRef.current = true;
     setProcessingSamples((count) => count + 1);
     setFaceHint("Photo captured — processing face sample...");
-    loadFaceModels()
-      .then(() => detectSingleFace(snapshot))
+    loadFaceRecognitionModel()
+      .then(() => computeFaceDescriptor(faceCrop))
       .then((result) => {
         if (!mountedRef.current) return;
         if (!result) {
@@ -231,7 +240,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
           setFaceHint("Try one more sample");
           return;
         }
-        setDescriptors((d) => [...d, Array.from(result.descriptor)]);
+        setDescriptors((d) => [...d, Array.from(result)]);
         setFaceHint("Sample ready");
         toast.success(source === "auto" ? "Face sample ready" : `Sample ${descriptorsCountRef.current + 1} ready`);
       })
