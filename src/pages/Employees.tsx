@@ -309,23 +309,28 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const capture = async () => {
+  const capture = useCallback(async (source: "manual" | "auto" = "manual", existingResult?: any) => {
     const v = videoRef.current;
     if (!v || status !== "ready") return;
-    if (v.readyState < 2 || v.paused) {
+    if (captureLockRef.current) return;
+    if (v.readyState < 2 || v.paused || v.videoWidth === 0) {
       toast.error("Camera not ready yet");
       return;
     }
+    captureLockRef.current = true;
     setCapturing(true);
     try {
       // ensure models are loaded before detecting
       await loadFaceModels();
-      const result = await detectSingleFace(v);
+      setModelsReady(true);
+      const result = existingResult ?? (await detectSingleFace(v));
       if (!result) {
-        toast.error("No face detected. Look straight at the camera.");
+        if (source === "manual") toast.error("No face detected. Look straight at the camera.");
       } else {
+        const image = captureFaceImage(v, result);
+        if (image) setFaceImage(image);
         setDescriptors((d) => [...d, Array.from(result.descriptor)]);
-        toast.success(`Captured sample ${descriptors.length + 1}`);
+        toast.success(source === "auto" ? "Face auto-captured" : `Captured sample ${descriptors.length + 1}`);
       }
     } catch (e: any) {
       const msg = String(e?.message ?? e);
@@ -337,8 +342,11 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       console.error("Face capture error:", e);
     } finally {
       setCapturing(false);
+      captureLockRef.current = false;
+      countdownStartedRef.current = null;
+      setCountdown(null);
     }
-  };
+  }, [descriptors.length, status]);
 
   const save = async () => {
     try {
