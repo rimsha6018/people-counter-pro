@@ -407,7 +407,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     };
   }, [startCamera, stopCamera]);
 
-  const capture = useCallback(async (source: "manual" | "auto" = "manual", existingResult?: FaceDescriptorResult) => {
+  const capture = useCallback(async (source: "manual" | "auto" = "manual") => {
     const v = videoRef.current;
     if (!v || status !== "ready") return;
     if (captureLockRef.current) return;
@@ -420,27 +420,24 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     try {
       setFaceHint("Capturing sample...");
       const snapshot = makeDetectionSnapshot(v);
-      // Keep the capture action bounded so the button never buffers indefinitely.
-      await withTimeout(loadFaceModels(), 1800, "Face model loading timed out");
-      setModelsReady(true);
-      const result = existingResult?.descriptor
-        ? existingResult
-        : await withTimeout(detectSingleFace(snapshot), 1200, "Face capture timed out");
-      if (!result) {
-        if (source === "manual") toast.error("No face detected. Look straight at the camera.");
-      } else {
-        const image = captureFaceImage(snapshot, result);
-        if (image) setFaceImage(image);
-        setDescriptors((d) => [...d, Array.from(result.descriptor)]);
-        setFaceHint("Sample captured");
-        toast.success(source === "auto" ? "Face auto-captured" : `Captured sample ${descriptorsCountRef.current + 1}`);
+      const cachedBox = lastFaceBoxRef.current;
+      const freshCachedBox = cachedBox && Date.now() - cachedBox.at < 2000 ? cachedBox.box : undefined;
+      let cropDetection: FaceDetectionLike | undefined = freshCachedBox ? { box: freshCachedBox } : undefined;
+
+      if (!cropDetection) {
+        const quickResult = await withTimeout(detectFaceBox(snapshot), 900, "Face crop timed out").catch(() => null);
+        if (quickResult?.box) cropDetection = { box: quickResult.box };
       }
+      const image = captureFaceImage(snapshot, cropDetection);
+      if (!image) throw new Error("Could not capture image");
+
+      setFaceImage(image);
+      setFaceHint("Photo captured");
+      toast.success(source === "auto" ? "Photo auto-captured" : "Photo captured — processing sample");
+      queueDescriptorProcessing(snapshot, source);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("timed out")) {
-        setFaceHint("Capture timed out — try again");
-        toast.error("Capture took too long. Keep your face centered and try again.");
-      } else if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
+      if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
         toast.error("Failed to load face model. Check your internet connection.");
       } else {
         toast.error("Face capture failed");
