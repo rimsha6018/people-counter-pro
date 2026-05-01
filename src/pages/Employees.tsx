@@ -411,7 +411,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     if (status !== "ready") return;
     let cancelled = false;
 
-    loadFaceModels()
+    loadFaceDetectionModel()
       .then(() => {
         if (cancelled || status !== "ready") return;
         setModelsReady(true);
@@ -419,9 +419,11 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         drawFaceBox();
         detectionLoopRef.current = window.setInterval(async () => {
           const v = videoRef.current;
-          if (!v || v.readyState < 2 || v.paused || v.videoWidth === 0 || captureLockRef.current) return;
+          if (!v || v.readyState < 2 || v.paused || v.videoWidth === 0 || captureLockRef.current || detectionBusyRef.current) return;
+          detectionBusyRef.current = true;
           try {
-            const result = await detectSingleFace(v);
+            const snapshot = makeDetectionSnapshot(v);
+            const result = await withTimeout(detectFaceBox(snapshot), 900, "Face detection timed out");
             const box = result?.detection?.box;
             drawFaceBox(box);
             if (!result) {
@@ -447,6 +449,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             }
           } catch (error) {
             console.error("Face detection loop error:", error);
+          } finally {
+            detectionBusyRef.current = false;
           }
         }, 300);
       })
