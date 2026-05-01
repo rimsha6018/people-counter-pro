@@ -55,7 +55,7 @@ export default function EmployeesPage() {
       return;
     }
     setEmployees(
-      (data ?? []).map((e: any) => ({
+      ((data ?? []) as Employee[]).map((e) => ({
         ...e,
         face_descriptors: Array.isArray(e.face_descriptors) ? e.face_descriptors : [],
       })),
@@ -487,8 +487,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     try {
       nameSchema.parse(name);
       emailSchema.parse(email);
-    } catch (err: any) {
-      return toast.error(err.errors?.[0]?.message ?? "Invalid input");
+    } catch (err: unknown) {
+      return toast.error(err instanceof z.ZodError ? err.errors[0]?.message : "Invalid input");
     }
     if (descriptors.length < 1) return toast.error("Capture at least 1 face sample");
     if (!faceImage) return toast.error("Capture a face photo before saving");
@@ -500,7 +500,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       face_descriptors: descriptors,
       face_image: faceImage,
       created_by: (await supabase.auth.getUser()).data.user?.id,
-    } as any);
+    } as never);
     setSaving(false);
     if (error) return toast.error(error.message);
     toast.success("Employee registered");
