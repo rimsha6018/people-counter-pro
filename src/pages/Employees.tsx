@@ -520,6 +520,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     } catch (err: unknown) {
       return toast.error(err instanceof z.ZodError ? err.errors[0]?.message : "Invalid input");
     }
+    if (processingSamples > 0) return toast.error("Wait for face sample processing to finish");
     if (descriptors.length < 1) return toast.error("Capture at least 1 face sample");
     if (!faceImage) return toast.error("Capture a face photo before saving");
 
@@ -625,7 +626,9 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
           )}
           <Badge className={`absolute left-3 top-3 font-mono ${statusTone}`}>{statusLabel}</Badge>
           <Badge className="absolute right-3 top-3 font-mono">
-            {descriptors.length} sample{descriptors.length === 1 ? "" : "s"}
+            {processingSamples > 0
+              ? `${descriptors.length} sample${descriptors.length === 1 ? "" : "s"} · processing`
+              : `${descriptors.length} sample${descriptors.length === 1 ? "" : "s"}`}
           </Badge>
         </div>
 
@@ -658,7 +661,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             {capturing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             Capture sample
           </Button>
-          {descriptors.length > 0 && (
+          {(descriptors.length > 0 || faceImage) && (
             <Button variant="ghost" onClick={() => { setDescriptors([]); setFaceImage(null); }} className="gap-1">
               <X className="h-4 w-4" /> Clear
             </Button>
@@ -667,7 +670,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             <Button variant="ghost" onClick={handleClose}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving || descriptors.length === 0 || !faceImage}>
+            <Button onClick={save} disabled={saving || processingSamples > 0 || descriptors.length === 0 || !faceImage}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save
             </Button>
           </div>
