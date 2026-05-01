@@ -3,7 +3,7 @@
 
 import * as faceapi from "face-api.js";
 
-const MODEL_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js-models@master";
+const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model";
 
 let loadPromise: Promise<void> | null = null;
 

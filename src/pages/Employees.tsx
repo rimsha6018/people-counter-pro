@@ -280,8 +280,14 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         setDescriptors((d) => [...d, Array.from(result.descriptor)]);
         toast.success(`Captured sample ${descriptors.length + 1}`);
       }
-    } catch (e) {
-      toast.error("Face capture failed");
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
+        toast.error("Failed to load face model. Check your internet connection.");
+      } else {
+        toast.error("Face capture failed");
+      }
+      console.error("Face capture error:", e);
     } finally {
       setCapturing(false);
     }
