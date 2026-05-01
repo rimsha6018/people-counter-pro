@@ -163,6 +163,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const detectionLoopRef = useRef<number | null>(null);
   const detectionBusyRef = useRef(false);
   const captureLockRef = useRef(false);
+  const descriptorProcessingRef = useRef(false);
+  const lastFaceBoxRef = useRef<{ box: BoxLike; at: number } | null>(null);
   const lastAutoCaptureRef = useRef(0);
   const countdownStartedRef = useRef<number | null>(null);
   const descriptorsCountRef = useRef(0);
@@ -171,6 +173,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [descriptors, setDescriptors] = useState<number[][]>([]);
   const [faceImage, setFaceImage] = useState<string | null>(null);
   const [capturing, setCapturing] = useState(false);
+  const [processingSamples, setProcessingSamples] = useState(0);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<CameraStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
@@ -215,6 +218,36 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       promise,
       new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(label)), ms)),
     ]);
+
+  const queueDescriptorProcessing = useCallback((snapshot: HTMLCanvasElement, source: "manual" | "auto") => {
+    descriptorProcessingRef.current = true;
+    setProcessingSamples((count) => count + 1);
+    setFaceHint("Photo captured — processing face sample...");
+    loadFaceModels()
+      .then(() => detectSingleFace(snapshot))
+      .then((result) => {
+        if (!mountedRef.current) return;
+        if (!result) {
+          toast.error("Photo captured, but no face descriptor was created. Try one more sample.");
+          setFaceHint("Try one more sample");
+          return;
+        }
+        setDescriptors((d) => [...d, Array.from(result.descriptor)]);
+        setFaceHint("Sample ready");
+        toast.success(source === "auto" ? "Face sample ready" : `Sample ${descriptorsCountRef.current + 1} ready`);
+      })
+      .catch((e: unknown) => {
+        if (!mountedRef.current) return;
+        console.error("Face descriptor processing error:", e);
+        setFaceHint("Photo saved — capture another angle");
+        toast.error("Photo captured, but face recognition processing is still warming up. Capture one more sample.");
+      })
+      .finally(() => {
+        if (!mountedRef.current) return;
+        setProcessingSamples((count) => Math.max(0, count - 1));
+        descriptorProcessingRef.current = false;
+      });
+  }, []);
 
   const drawFaceBox = useCallback((box?: BoxLike) => {
     const canvas = overlayRef.current;
