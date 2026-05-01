@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { detectSingleFace, loadFaceModels } from "@/lib/faceRecognition";
+import { detectFaceBox, detectSingleFace, loadFaceDetectionModel, loadFaceModels } from "@/lib/faceRecognition";
 
 interface Employee {
   id: string;
@@ -172,27 +172,43 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [countdown, setCountdown] = useState<number | null>(null);
   const [faceHint, setFaceHint] = useState("Center your face");
 
-  const captureFaceImage = (video: HTMLVideoElement, detection?: any) => {
+  const captureFaceImage = (source: HTMLVideoElement | HTMLCanvasElement, detection?: any) => {
     const canvas = document.createElement("canvas");
     canvas.width = 360;
     canvas.height = 360;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
+    const vw = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+    const vh = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
     const box = detection?.detection?.box;
     if (box && vw > 0 && vh > 0) {
       const size = Math.min(Math.max(box.width, box.height) * 1.8, Math.min(vw, vh));
       const sx = Math.max(0, Math.min(vw - size, box.x + box.width / 2 - size / 2));
       const sy = Math.max(0, Math.min(vh - size, box.y + box.height / 2 - size / 2));
-      ctx.drawImage(video, sx, sy, size, size, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(source, sx, sy, size, size, 0, 0, canvas.width, canvas.height);
     } else {
       const size = Math.min(vw, vh);
-      ctx.drawImage(video, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(source, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, canvas.width, canvas.height);
     }
     return canvas.toDataURL("image/jpeg", 0.82);
   };
+
+  const makeDetectionSnapshot = (video: HTMLVideoElement) => {
+    const canvas = document.createElement("canvas");
+    const maxWidth = 360;
+    const scale = Math.min(1, maxWidth / Math.max(video.videoWidth, 1));
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  };
+
+  const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string) =>
+    Promise.race<T>([
+      promise,
+      new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(label)), ms)),
+    ]);
 
   const drawFaceBox = useCallback((box?: { x: number; y: number; width: number; height: number }) => {
     const canvas = overlayRef.current;
