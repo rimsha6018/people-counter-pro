@@ -208,9 +208,6 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     return canvas;
   };
 
-  const captureFaceImage = (source: HTMLVideoElement | HTMLCanvasElement, detection?: FaceDetectionLike | null) =>
-    createFaceCropCanvas(source, detection).toDataURL("image/jpeg", 0.82);
-
   const makeDetectionSnapshot = (video: HTMLVideoElement) => {
     const canvas = document.createElement("canvas");
     const maxWidth = 360;
@@ -436,13 +433,14 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         const quickResult = await withTimeout(detectFaceBox(snapshot), 900, "Face crop timed out").catch(() => null);
         if (quickResult?.box) cropDetection = { box: quickResult.box };
       }
-      const image = captureFaceImage(snapshot, cropDetection);
-      if (!image) throw new Error("Could not capture image");
+      const faceCrop = createFaceCropCanvas(snapshot, cropDetection);
+      if (!faceCrop) throw new Error("Could not capture image");
+      const image = faceCrop.toDataURL("image/jpeg", 0.82);
 
       setFaceImage(image);
       setFaceHint("Photo captured");
       toast.success(source === "auto" ? "Photo auto-captured" : "Photo captured — processing sample");
-      queueDescriptorProcessing(snapshot, source);
+      queueDescriptorProcessing(faceCrop, source);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
@@ -457,7 +455,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       countdownStartedRef.current = null;
       setCountdown(null);
     }
-  }, [status]);
+  }, [queueDescriptorProcessing, status]);
 
   useEffect(() => {
     if (status !== "ready") return;
