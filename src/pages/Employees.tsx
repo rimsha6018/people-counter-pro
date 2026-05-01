@@ -149,6 +149,11 @@ export default function EmployeesPage() {
 }
 
 type CameraStatus = "idle" | "loading" | "ready" | "error" | "denied";
+type BoxLike = { x: number; y: number; width: number; height: number };
+type FaceDetectionLike = { box?: BoxLike; detection?: { box?: BoxLike } };
+type FaceDescriptorResult = FaceDetectionLike & { descriptor: Float32Array };
+
+const getDetectionBox = (detection?: FaceDetectionLike | null) => detection?.detection?.box ?? detection?.box;
 
 function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -173,7 +178,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [countdown, setCountdown] = useState<number | null>(null);
   const [faceHint, setFaceHint] = useState("Center your face");
 
-  const captureFaceImage = (source: HTMLVideoElement | HTMLCanvasElement, detection?: any) => {
+  const captureFaceImage = (source: HTMLVideoElement | HTMLCanvasElement, detection?: FaceDetectionLike | null) => {
     const canvas = document.createElement("canvas");
     canvas.width = 360;
     canvas.height = 360;
@@ -182,7 +187,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
 
     const vw = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
     const vh = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
-    const box = detection?.detection?.box ?? detection?.box;
+    const box = getDetectionBox(detection);
     if (box && vw > 0 && vh > 0) {
       const size = Math.min(Math.max(box.width, box.height) * 1.8, Math.min(vw, vh));
       const sx = Math.max(0, Math.min(vw - size, box.x + box.width / 2 - size / 2));
@@ -211,7 +216,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(label)), ms)),
     ]);
 
-  const drawFaceBox = useCallback((box?: { x: number; y: number; width: number; height: number }) => {
+  const drawFaceBox = useCallback((box?: BoxLike) => {
     const canvas = overlayRef.current;
     const video = videoRef.current;
     const ctx = canvas?.getContext("2d");
@@ -232,8 +237,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     ctx.strokeRect(box.x, box.y, box.width, box.height);
   }, []);
 
-  const isFaceCentered = (source: HTMLVideoElement | HTMLCanvasElement, detection: any) => {
-    const box = detection?.detection?.box ?? detection?.box;
+  const isFaceCentered = (source: HTMLVideoElement | HTMLCanvasElement, detection: FaceDetectionLike | null | undefined) => {
+    const box = getDetectionBox(detection);
     const width = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
     const height = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
     if (!box || width === 0 || height === 0) return false;
@@ -245,7 +250,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     return withinX && withinY && bigEnough;
   };
 
-  const scaleBox = (box: { x: number; y: number; width: number; height: number }, from: HTMLCanvasElement, to: HTMLVideoElement) => ({
+  const scaleBox = (box: BoxLike, from: HTMLCanvasElement, to: HTMLVideoElement) => ({
     x: box.x * (to.videoWidth / from.width),
     y: box.y * (to.videoHeight / from.height),
     width: box.width * (to.videoWidth / from.width),
