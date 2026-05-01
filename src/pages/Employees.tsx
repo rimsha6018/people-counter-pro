@@ -156,6 +156,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(true);
   const detectionLoopRef = useRef<number | null>(null);
+  const detectionBusyRef = useRef(false);
   const captureLockRef = useRef(false);
   const lastAutoCaptureRef = useRef(0);
   const countdownStartedRef = useRef<number | null>(null);
@@ -349,7 +350,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   // Auto-start on mount + cleanup on unmount
   useEffect(() => {
     mountedRef.current = true;
-    // Pre-warm face models in parallel so first capture isn't slow
+    // Pre-warm face models in parallel so first capture isn't slow, without blocking camera startup.
+    loadFaceDetectionModel().catch(() => {});
     loadFaceModels().catch(() => {});
     startCamera();
     return () => {
@@ -369,21 +371,29 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     captureLockRef.current = true;
     setCapturing(true);
     try {
-      // ensure models are loaded before detecting
-      await loadFaceModels();
+      setFaceHint("Capturing sample...");
+      const snapshot = makeDetectionSnapshot(v);
+      // Keep the capture action bounded so the button never buffers indefinitely.
+      await withTimeout(loadFaceModels(), 1800, "Face model loading timed out");
       setModelsReady(true);
-      const result = existingResult ?? (await detectSingleFace(v));
+      const result = existingResult?.descriptor
+        ? existingResult
+        : await withTimeout(detectSingleFace(snapshot), 1200, "Face capture timed out");
       if (!result) {
         if (source === "manual") toast.error("No face detected. Look straight at the camera.");
       } else {
-        const image = captureFaceImage(v, result);
+        const image = captureFaceImage(snapshot, result);
         if (image) setFaceImage(image);
         setDescriptors((d) => [...d, Array.from(result.descriptor)]);
+        setFaceHint("Sample captured");
         toast.success(source === "auto" ? "Face auto-captured" : `Captured sample ${descriptorsCountRef.current + 1}`);
       }
     } catch (e: any) {
       const msg = String(e?.message ?? e);
-      if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
+      if (msg.includes("timed out")) {
+        setFaceHint("Capture timed out — try again");
+        toast.error("Capture took too long. Keep your face centered and try again.");
+      } else if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
         toast.error("Failed to load face model. Check your internet connection.");
       } else {
         toast.error("Face capture failed");
