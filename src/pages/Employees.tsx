@@ -152,15 +152,23 @@ type CameraStatus = "idle" | "loading" | "ready" | "error" | "denied";
 
 function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(true);
+  const detectionLoopRef = useRef<number | null>(null);
+  const lastAutoCaptureRef = useRef(0);
+  const countdownStartedRef = useRef<number | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [descriptors, setDescriptors] = useState<number[][]>([]);
+  const [faceImage, setFaceImage] = useState<string | null>(null);
   const [capturing, setCapturing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<CameraStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const [modelsReady, setModelsReady] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [faceHint, setFaceHint] = useState("Center your face");
 
   const stopCamera = () => {
     const s = streamRef.current;
