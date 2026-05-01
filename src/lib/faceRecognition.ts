@@ -3,7 +3,11 @@
 
 import * as faceapi from "face-api.js";
 
-const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model";
+// Models compatible with face-api.js (justadudewhohacks). The @vladmandic/face-api
+// model JSONs use a different op format and cause "forwardFunc is not a function"
+// errors when loaded with face-api.js. Use the matching model repo via jsdelivr.
+const MODEL_URL =
+  "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights";
 
 let loadPromise: Promise<void> | null = null;
 
