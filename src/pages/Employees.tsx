@@ -262,6 +262,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       const done = () => resolve();
       video.addEventListener("loadedmetadata", done, { once: true });
       video.addEventListener("canplay", done, { once: true });
+      window.setTimeout(done, 1200);
     });
 
   const startCamera = useCallback(async () => {
@@ -337,14 +338,9 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     startCamera();
     return () => {
       mountedRef.current = false;
-      const s = streamRef.current;
-      if (s) {
-        s.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
+      stopCamera();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [startCamera, stopCamera]);
 
   const capture = useCallback(async (source: "manual" | "auto" = "manual", existingResult?: any) => {
     const v = videoRef.current;
@@ -451,14 +447,16 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       return toast.error(err.errors?.[0]?.message ?? "Invalid input");
     }
     if (descriptors.length < 1) return toast.error("Capture at least 1 face sample");
+    if (!faceImage) return toast.error("Capture a face photo before saving");
 
     setSaving(true);
     const { error } = await supabase.from("employees").insert({
       name: name.trim(),
       email: email.trim() || null,
       face_descriptors: descriptors,
+      face_image: faceImage,
       created_by: (await supabase.auth.getUser()).data.user?.id,
-    });
+    } as any);
     setSaving(false);
     if (error) return toast.error(error.message);
     toast.success("Employee registered");
