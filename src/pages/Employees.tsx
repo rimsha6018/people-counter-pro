@@ -23,6 +23,7 @@ import {
   loadFaceDetectionModel,
   loadFaceModels,
   loadFaceRecognitionModel,
+  warmFaceRecognitionModel,
 } from "@/lib/faceRecognition";
 
 interface Employee {
@@ -228,7 +229,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     descriptorProcessingRef.current = true;
     setProcessingSamples((count) => count + 1);
     setFaceHint("Photo captured — processing face sample...");
-    loadFaceRecognitionModel()
+    warmFaceRecognitionModel()
       .then(() => computeFaceDescriptor(faceCrop))
       .then((result) => {
         if (!mountedRef.current) return;
@@ -405,6 +406,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     // Pre-warm face models in parallel so first capture isn't slow, without blocking camera startup.
     loadFaceDetectionModel().catch(() => {});
     loadFaceModels().catch(() => {});
+    warmFaceRecognitionModel().catch(() => {});
     startCamera();
     return () => {
       mountedRef.current = false;
