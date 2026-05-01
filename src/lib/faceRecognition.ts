@@ -9,17 +9,30 @@ import * as faceapi from "face-api.js";
 const MODEL_URL =
   "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights";
 
+let detectionLoadPromise: Promise<void> | null = null;
 let loadPromise: Promise<void> | null = null;
+
+export async function loadFaceDetectionModel() {
+  if (detectionLoadPromise) return detectionLoadPromise;
+  detectionLoadPromise = faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL).catch((error) => {
+    detectionLoadPromise = null;
+    throw error;
+  });
+  return detectionLoadPromise;
+}
 
 export async function loadFaceModels() {
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
+    await loadFaceDetectionModel();
     await Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
       faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
     ]);
-  })();
+  })().catch((error) => {
+    loadPromise = null;
+    throw error;
+  });
   return loadPromise;
 }
 
@@ -52,9 +65,13 @@ export async function detectFaces(input: HTMLVideoElement | HTMLCanvasElement | 
     .withFaceDescriptors();
 }
 
+export async function detectFaceBox(input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement) {
+  return faceapi.detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.45 }));
+}
+
 export async function detectSingleFace(input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement) {
   return faceapi
-    .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+    .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.45 }))
     .withFaceLandmarks()
     .withFaceDescriptor();
 }
