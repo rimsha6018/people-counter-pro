@@ -367,7 +367,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         const image = captureFaceImage(v, result);
         if (image) setFaceImage(image);
         setDescriptors((d) => [...d, Array.from(result.descriptor)]);
-        toast.success(source === "auto" ? "Face auto-captured" : `Captured sample ${descriptors.length + 1}`);
+        toast.success(source === "auto" ? "Face auto-captured" : `Captured sample ${descriptorsCountRef.current + 1}`);
       }
     } catch (e: any) {
       const msg = String(e?.message ?? e);
@@ -383,7 +383,65 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       countdownStartedRef.current = null;
       setCountdown(null);
     }
-  }, [descriptors.length, status]);
+  }, [status]);
+
+  useEffect(() => {
+    if (status !== "ready") return;
+    let cancelled = false;
+
+    loadFaceModels()
+      .then(() => {
+        if (cancelled || status !== "ready") return;
+        setModelsReady(true);
+        setFaceHint("Center your face");
+        drawFaceBox();
+        detectionLoopRef.current = window.setInterval(async () => {
+          const v = videoRef.current;
+          if (!v || v.readyState < 2 || v.paused || v.videoWidth === 0 || captureLockRef.current) return;
+          try {
+            const result = await detectSingleFace(v);
+            const box = result?.detection?.box;
+            drawFaceBox(box);
+            if (!result) {
+              countdownStartedRef.current = null;
+              setCountdown(null);
+              setFaceHint("No face detected");
+              return;
+            }
+            if (!isFaceCentered(v, result)) {
+              countdownStartedRef.current = null;
+              setCountdown(null);
+              setFaceHint("Move closer and center your face");
+              return;
+            }
+            setFaceHint("Hold still");
+            const now = Date.now();
+            if (!countdownStartedRef.current) countdownStartedRef.current = now;
+            const elapsed = now - countdownStartedRef.current;
+            setCountdown(Math.max(1, Math.ceil((3000 - elapsed) / 1000)));
+            if (elapsed >= 3000 && now - lastAutoCaptureRef.current > 5000) {
+              lastAutoCaptureRef.current = now;
+              await capture("auto", result);
+            }
+          } catch (error) {
+            console.error("Face detection loop error:", error);
+          }
+        }, 300);
+      })
+      .catch((error) => {
+        console.error("Face model load error:", error);
+        setFaceHint("Face model failed to load");
+        toast.error("Face detection engine could not start");
+      });
+
+    return () => {
+      cancelled = true;
+      if (detectionLoopRef.current) {
+        window.clearInterval(detectionLoopRef.current);
+        detectionLoopRef.current = null;
+      }
+    };
+  }, [capture, drawFaceBox, status]);
 
   const save = async () => {
     try {
