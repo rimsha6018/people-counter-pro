@@ -341,8 +341,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         await waitForVideo(v);
       }
       setStatus("ready");
-    } catch (err: any) {
-      const name = err?.name ?? "";
+    } catch (err: unknown) {
+      const name = err instanceof DOMException ? err.name : "";
       let msg = "Could not start camera.";
       if (name === "NotAllowedError" || name === "SecurityError") {
         msg = "Permission denied. Allow camera access in your browser settings and try again.";
@@ -374,7 +374,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     };
   }, [startCamera, stopCamera]);
 
-  const capture = useCallback(async (source: "manual" | "auto" = "manual", existingResult?: any) => {
+  const capture = useCallback(async (source: "manual" | "auto" = "manual", existingResult?: FaceDescriptorResult) => {
     const v = videoRef.current;
     if (!v || status !== "ready") return;
     if (captureLockRef.current) return;
@@ -402,8 +402,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         setFaceHint("Sample captured");
         toast.success(source === "auto" ? "Face auto-captured" : `Captured sample ${descriptorsCountRef.current + 1}`);
       }
-    } catch (e: any) {
-      const msg = String(e?.message ?? e);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("timed out")) {
         setFaceHint("Capture timed out — try again");
         toast.error("Capture took too long. Keep your face centered and try again.");
