@@ -434,14 +434,14 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             const snapshot = makeDetectionSnapshot(v);
             const result = await withTimeout(detectFaceBox(snapshot), 900, "Face detection timed out");
             const box = result?.box;
-            drawFaceBox(box);
+            drawFaceBox(box ? scaleBox(box, snapshot, v) : undefined);
             if (!result) {
               countdownStartedRef.current = null;
               setCountdown(null);
               setFaceHint("No face detected");
               return;
             }
-            if (!isFaceCentered(v, result)) {
+            if (!isFaceCentered(snapshot, result)) {
               countdownStartedRef.current = null;
               setCountdown(null);
               setFaceHint("Move closer and center your face");
