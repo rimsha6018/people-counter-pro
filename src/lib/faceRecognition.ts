@@ -11,6 +11,7 @@ const MODEL_URL =
 
 let detectionLoadPromise: Promise<void> | null = null;
 let recognitionLoadPromise: Promise<void> | null = null;
+let recognitionWarmupPromise: Promise<void> | null = null;
 let loadPromise: Promise<void> | null = null;
 
 export async function loadFaceDetectionModel() {
@@ -44,6 +45,21 @@ export async function loadFaceRecognitionModel() {
     throw error;
   });
   return recognitionLoadPromise;
+}
+
+export async function warmFaceRecognitionModel() {
+  if (recognitionWarmupPromise) return recognitionWarmupPromise;
+  recognitionWarmupPromise = (async () => {
+    await loadFaceRecognitionModel();
+    const canvas = document.createElement("canvas");
+    canvas.width = 150;
+    canvas.height = 150;
+    await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(canvas);
+  })().catch((error) => {
+    recognitionWarmupPromise = null;
+    throw error;
+  });
+  return recognitionWarmupPromise;
 }
 
 export type StoredEmployee = {
