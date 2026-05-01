@@ -10,6 +10,7 @@ const MODEL_URL =
   "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights";
 
 let detectionLoadPromise: Promise<void> | null = null;
+let recognitionLoadPromise: Promise<void> | null = null;
 let loadPromise: Promise<void> | null = null;
 
 export async function loadFaceDetectionModel() {
@@ -27,13 +28,22 @@ export async function loadFaceModels() {
     await loadFaceDetectionModel();
     await Promise.all([
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+      loadFaceRecognitionModel(),
     ]);
   })().catch((error) => {
     loadPromise = null;
     throw error;
   });
   return loadPromise;
+}
+
+export async function loadFaceRecognitionModel() {
+  if (recognitionLoadPromise) return recognitionLoadPromise;
+  recognitionLoadPromise = faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL).catch((error) => {
+    recognitionLoadPromise = null;
+    throw error;
+  });
+  return recognitionLoadPromise;
 }
 
 export type StoredEmployee = {
@@ -74,6 +84,11 @@ export async function detectSingleFace(input: HTMLVideoElement | HTMLCanvasEleme
     .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.45 }))
     .withFaceLandmarks()
     .withFaceDescriptor();
+}
+
+export async function computeFaceDescriptor(input: HTMLCanvasElement | HTMLImageElement) {
+  const descriptor = await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(input);
+  return Array.isArray(descriptor) ? descriptor[0] : descriptor;
 }
 
 export { faceapi };
