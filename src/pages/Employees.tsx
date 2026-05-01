@@ -22,7 +22,6 @@ import {
   detectFaceBox,
   loadFaceDetectionModel,
   loadFaceModels,
-  loadFaceRecognitionModel,
   warmFaceRecognitionModel,
 } from "@/lib/faceRecognition";
 
@@ -229,8 +228,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     descriptorProcessingRef.current = true;
     setProcessingSamples((count) => count + 1);
     setFaceHint("Photo captured — processing face sample...");
-    warmFaceRecognitionModel()
-      .then(() => computeFaceDescriptor(faceCrop))
+    withTimeout(warmFaceRecognitionModel(), 10000, "Face model warmup timed out")
+      .then(() => withTimeout(computeFaceDescriptor(faceCrop), 6000, "Face descriptor timed out"))
       .then((result) => {
         if (!mountedRef.current) return;
         if (!result) {
