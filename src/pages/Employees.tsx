@@ -17,7 +17,13 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { detectFaceBox, detectSingleFace, loadFaceDetectionModel, loadFaceModels } from "@/lib/faceRecognition";
+import {
+  computeFaceDescriptor,
+  detectFaceBox,
+  loadFaceDetectionModel,
+  loadFaceModels,
+  warmFaceRecognitionModel,
+} from "@/lib/faceRecognition";
 
 interface Employee {
   id: string;
@@ -151,7 +157,6 @@ export default function EmployeesPage() {
 type CameraStatus = "idle" | "loading" | "ready" | "error" | "denied";
 type BoxLike = { x: number; y: number; width: number; height: number };
 type FaceDetectionLike = { box?: BoxLike; detection?: { box?: BoxLike } };
-type FaceDescriptorResult = FaceDetectionLike & { descriptor: Float32Array };
 
 const getDetectionBox = (detection?: FaceDetectionLike | null) => detection?.detection?.box ?? detection?.box;
 
@@ -163,6 +168,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const detectionLoopRef = useRef<number | null>(null);
   const detectionBusyRef = useRef(false);
   const captureLockRef = useRef(false);
+  const descriptorProcessingRef = useRef(false);
+  const lastFaceBoxRef = useRef<{ box: BoxLike; at: number } | null>(null);
   const lastAutoCaptureRef = useRef(0);
   const countdownStartedRef = useRef<number | null>(null);
   const descriptorsCountRef = useRef(0);
@@ -171,6 +178,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [descriptors, setDescriptors] = useState<number[][]>([]);
   const [faceImage, setFaceImage] = useState<string | null>(null);
   const [capturing, setCapturing] = useState(false);
+  const [processingSamples, setProcessingSamples] = useState(0);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<CameraStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
@@ -178,7 +186,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [countdown, setCountdown] = useState<number | null>(null);
   const [faceHint, setFaceHint] = useState("Center your face");
 
-  const captureFaceImage = (source: HTMLVideoElement | HTMLCanvasElement, detection?: FaceDetectionLike | null) => {
+  const createFaceCropCanvas = (source: HTMLVideoElement | HTMLCanvasElement, detection?: FaceDetectionLike | null) => {
     const canvas = document.createElement("canvas");
     canvas.width = 360;
     canvas.height = 360;
@@ -197,7 +205,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       const size = Math.min(vw, vh);
       ctx.drawImage(source, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, canvas.width, canvas.height);
     }
-    return canvas.toDataURL("image/jpeg", 0.82);
+    return canvas;
   };
 
   const makeDetectionSnapshot = (video: HTMLVideoElement) => {
@@ -215,6 +223,36 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       promise,
       new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(label)), ms)),
     ]);
+
+  const queueDescriptorProcessing = useCallback((faceCrop: HTMLCanvasElement, source: "manual" | "auto") => {
+    descriptorProcessingRef.current = true;
+    setProcessingSamples((count) => count + 1);
+    setFaceHint("Photo captured — processing face sample...");
+    withTimeout(warmFaceRecognitionModel(), 10000, "Face model warmup timed out")
+      .then(() => withTimeout(computeFaceDescriptor(faceCrop), 6000, "Face descriptor timed out"))
+      .then((result) => {
+        if (!mountedRef.current) return;
+        if (!result) {
+          toast.error("Photo captured, but no face descriptor was created. Try one more sample.");
+          setFaceHint("Try one more sample");
+          return;
+        }
+        setDescriptors((d) => [...d, Array.from(result)]);
+        setFaceHint("Sample ready");
+        toast.success(source === "auto" ? "Face sample ready" : `Sample ${descriptorsCountRef.current + 1} ready`);
+      })
+      .catch((e: unknown) => {
+        if (!mountedRef.current) return;
+        console.error("Face descriptor processing error:", e);
+        setFaceHint("Photo saved — capture another angle");
+        toast.error("Photo captured, but face recognition processing is still warming up. Capture one more sample.");
+      })
+      .finally(() => {
+        if (!mountedRef.current) return;
+        setProcessingSamples((count) => Math.max(0, count - 1));
+        descriptorProcessingRef.current = false;
+      });
+  }, []);
 
   const drawFaceBox = useCallback((box?: BoxLike) => {
     const canvas = overlayRef.current;
@@ -367,6 +405,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     // Pre-warm face models in parallel so first capture isn't slow, without blocking camera startup.
     loadFaceDetectionModel().catch(() => {});
     loadFaceModels().catch(() => {});
+    warmFaceRecognitionModel().catch(() => {});
     startCamera();
     return () => {
       mountedRef.current = false;
@@ -374,7 +413,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     };
   }, [startCamera, stopCamera]);
 
-  const capture = useCallback(async (source: "manual" | "auto" = "manual", existingResult?: FaceDescriptorResult) => {
+  const capture = useCallback(async (source: "manual" | "auto" = "manual") => {
     const v = videoRef.current;
     if (!v || status !== "ready") return;
     if (captureLockRef.current) return;
@@ -387,27 +426,25 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     try {
       setFaceHint("Capturing sample...");
       const snapshot = makeDetectionSnapshot(v);
-      // Keep the capture action bounded so the button never buffers indefinitely.
-      await withTimeout(loadFaceModels(), 1800, "Face model loading timed out");
-      setModelsReady(true);
-      const result = existingResult?.descriptor
-        ? existingResult
-        : await withTimeout(detectSingleFace(snapshot), 1200, "Face capture timed out");
-      if (!result) {
-        if (source === "manual") toast.error("No face detected. Look straight at the camera.");
-      } else {
-        const image = captureFaceImage(snapshot, result);
-        if (image) setFaceImage(image);
-        setDescriptors((d) => [...d, Array.from(result.descriptor)]);
-        setFaceHint("Sample captured");
-        toast.success(source === "auto" ? "Face auto-captured" : `Captured sample ${descriptorsCountRef.current + 1}`);
+      const cachedBox = lastFaceBoxRef.current;
+      const freshCachedBox = cachedBox && Date.now() - cachedBox.at < 2000 ? cachedBox.box : undefined;
+      let cropDetection: FaceDetectionLike | undefined = freshCachedBox ? { box: freshCachedBox } : undefined;
+
+      if (!cropDetection) {
+        const quickResult = await withTimeout(detectFaceBox(snapshot), 900, "Face crop timed out").catch(() => null);
+        if (quickResult?.box) cropDetection = { box: quickResult.box };
       }
+      const faceCrop = createFaceCropCanvas(snapshot, cropDetection);
+      if (!faceCrop) throw new Error("Could not capture image");
+      const image = faceCrop.toDataURL("image/jpeg", 0.82);
+
+      setFaceImage(image);
+      setFaceHint("Photo captured");
+      toast.success(source === "auto" ? "Photo auto-captured" : "Photo captured — processing sample");
+      queueDescriptorProcessing(faceCrop, source);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("timed out")) {
-        setFaceHint("Capture timed out — try again");
-        toast.error("Capture took too long. Keep your face centered and try again.");
-      } else if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
+      if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
         toast.error("Failed to load face model. Check your internet connection.");
       } else {
         toast.error("Face capture failed");
@@ -419,7 +456,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       countdownStartedRef.current = null;
       setCountdown(null);
     }
-  }, [status]);
+  }, [queueDescriptorProcessing, status]);
 
   useEffect(() => {
     if (status !== "ready") return;
@@ -439,6 +476,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             const snapshot = makeDetectionSnapshot(v);
             const result = await withTimeout(detectFaceBox(snapshot), 900, "Face detection timed out");
             const box = result?.box;
+            if (box) lastFaceBoxRef.current = { box, at: Date.now() };
             drawFaceBox(box ? scaleBox(box, snapshot, v) : undefined);
             if (!result) {
               countdownStartedRef.current = null;
@@ -490,6 +528,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     } catch (err: unknown) {
       return toast.error(err instanceof z.ZodError ? err.errors[0]?.message : "Invalid input");
     }
+    if (processingSamples > 0) return toast.error("Wait for face sample processing to finish");
     if (descriptors.length < 1) return toast.error("Capture at least 1 face sample");
     if (!faceImage) return toast.error("Capture a face photo before saving");
 
@@ -595,7 +634,9 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
           )}
           <Badge className={`absolute left-3 top-3 font-mono ${statusTone}`}>{statusLabel}</Badge>
           <Badge className="absolute right-3 top-3 font-mono">
-            {descriptors.length} sample{descriptors.length === 1 ? "" : "s"}
+            {processingSamples > 0
+              ? `${descriptors.length} sample${descriptors.length === 1 ? "" : "s"} · processing`
+              : `${descriptors.length} sample${descriptors.length === 1 ? "" : "s"}`}
           </Badge>
         </div>
 
@@ -628,7 +669,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             {capturing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             Capture sample
           </Button>
-          {descriptors.length > 0 && (
+          {(descriptors.length > 0 || faceImage) && (
             <Button variant="ghost" onClick={() => { setDescriptors([]); setFaceImage(null); }} className="gap-1">
               <X className="h-4 w-4" /> Clear
             </Button>
@@ -637,7 +678,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             <Button variant="ghost" onClick={handleClose}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving || descriptors.length === 0 || !faceImage}>
+            <Button onClick={save} disabled={saving || processingSamples > 0 || descriptors.length === 0 || !faceImage}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save
             </Button>
           </div>
