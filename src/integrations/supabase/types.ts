@@ -77,6 +77,7 @@ export type Database = {
           created_by: string | null
           email: string | null
           face_descriptors: Json
+          face_image: string | null
           id: string
           name: string
           updated_at: string
@@ -86,6 +87,7 @@ export type Database = {
           created_by?: string | null
           email?: string | null
           face_descriptors?: Json
+          face_image?: string | null
           id?: string
           name: string
           updated_at?: string
@@ -95,6 +97,7 @@ export type Database = {
           created_by?: string | null
           email?: string | null
           face_descriptors?: Json
+          face_image?: string | null
           id?: string
           name?: string
           updated_at?: string

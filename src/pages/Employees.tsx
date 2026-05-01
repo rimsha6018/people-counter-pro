@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, Loader2, Plus, Power, PowerOff, Trash2, UserPlus, Video, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,6 +23,7 @@ interface Employee {
   id: string;
   name: string;
   email: string | null;
+  face_image?: string | null;
   face_descriptors: number[][];
   created_at: string;
 }
@@ -151,29 +152,120 @@ type CameraStatus = "idle" | "loading" | "ready" | "error" | "denied";
 
 function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(true);
+  const detectionLoopRef = useRef<number | null>(null);
+  const captureLockRef = useRef(false);
+  const lastAutoCaptureRef = useRef(0);
+  const countdownStartedRef = useRef<number | null>(null);
+  const descriptorsCountRef = useRef(0);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [descriptors, setDescriptors] = useState<number[][]>([]);
+  const [faceImage, setFaceImage] = useState<string | null>(null);
   const [capturing, setCapturing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<CameraStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const [modelsReady, setModelsReady] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [faceHint, setFaceHint] = useState("Center your face");
 
-  const stopCamera = () => {
+  const captureFaceImage = (video: HTMLVideoElement, detection?: any) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 360;
+    canvas.height = 360;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const box = detection?.detection?.box;
+    if (box && vw > 0 && vh > 0) {
+      const size = Math.min(Math.max(box.width, box.height) * 1.8, Math.min(vw, vh));
+      const sx = Math.max(0, Math.min(vw - size, box.x + box.width / 2 - size / 2));
+      const sy = Math.max(0, Math.min(vh - size, box.y + box.height / 2 - size / 2));
+      ctx.drawImage(video, sx, sy, size, size, 0, 0, canvas.width, canvas.height);
+    } else {
+      const size = Math.min(vw, vh);
+      ctx.drawImage(video, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, canvas.width, canvas.height);
+    }
+    return canvas.toDataURL("image/jpeg", 0.82);
+  };
+
+  const drawFaceBox = useCallback((box?: { x: number; y: number; width: number; height: number }) => {
+    const canvas = overlayRef.current;
+    const video = videoRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !video || !ctx || video.videoWidth === 0) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const styles = getComputedStyle(document.documentElement);
+    ctx.strokeStyle = `hsl(${styles.getPropertyValue("--primary")})`;
+    ctx.lineWidth = Math.max(4, canvas.width / 180);
+    ctx.setLineDash([18, 10]);
+    const guideSize = Math.min(canvas.width, canvas.height) * 0.55;
+    ctx.strokeRect((canvas.width - guideSize) / 2, (canvas.height - guideSize) / 2, guideSize, guideSize);
+    ctx.setLineDash([]);
+    if (!box) return;
+    ctx.strokeStyle = `hsl(${styles.getPropertyValue("--accent")})`;
+    ctx.lineWidth = Math.max(5, canvas.width / 160);
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+  }, []);
+
+  const isFaceCentered = (video: HTMLVideoElement, detection: any) => {
+    const box = detection?.detection?.box;
+    if (!box || video.videoWidth === 0 || video.videoHeight === 0) return false;
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+    const withinX = Math.abs(centerX - video.videoWidth / 2) < video.videoWidth * 0.2;
+    const withinY = Math.abs(centerY - video.videoHeight / 2) < video.videoHeight * 0.22;
+    const bigEnough = box.width > video.videoWidth * 0.16 && box.height > video.videoHeight * 0.22;
+    return withinX && withinY && bigEnough;
+  };
+
+  const clearOverlay = useCallback(() => {
+    const canvas = overlayRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
+  const stopCamera = useCallback(() => {
+    if (detectionLoopRef.current) {
+      window.clearInterval(detectionLoopRef.current);
+      detectionLoopRef.current = null;
+    }
+    countdownStartedRef.current = null;
+    if (mountedRef.current) setCountdown(null);
+    clearOverlay();
     const s = streamRef.current;
     if (s) {
       s.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
     if (videoRef.current) {
+      videoRef.current.pause();
       videoRef.current.srcObject = null;
     }
     if (mountedRef.current) setStatus("idle");
-  };
+  }, [clearOverlay]);
 
-  const startCamera = async () => {
+  useEffect(() => {
+    descriptorsCountRef.current = descriptors.length;
+  }, [descriptors.length]);
+
+  const waitForVideo = (video: HTMLVideoElement) =>
+    new Promise<void>((resolve) => {
+      if (video.readyState >= 2 && video.videoWidth > 0) return resolve();
+      const done = () => resolve();
+      video.addEventListener("loadedmetadata", done, { once: true });
+      video.addEventListener("canplay", done, { once: true });
+      window.setTimeout(done, 1200);
+    });
+
+  const startCamera = useCallback(async () => {
     // Must run synchronously from a user gesture (or at mount) — no awaits before getUserMedia.
     setErrorMsg("");
     setStatus("loading");
@@ -197,11 +289,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       return;
     }
 
-    // Stop any prior stream first
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
+    if (streamRef.current) stopCamera();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -218,11 +306,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         v.srcObject = stream;
         v.muted = true;
         v.playsInline = true;
-        try {
-          await v.play();
-        } catch {
-          /* autoplay can be blocked; user can press Start again */
-        }
+        await v.play();
+        await waitForVideo(v);
       }
       setStatus("ready");
     } catch (err: any) {
@@ -243,7 +328,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       setErrorMsg(msg);
       toast.error(msg);
     }
-  };
+  }, [stopCamera]);
 
   // Auto-start on mount + cleanup on unmount
   useEffect(() => {
@@ -253,32 +338,32 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     startCamera();
     return () => {
       mountedRef.current = false;
-      const s = streamRef.current;
-      if (s) {
-        s.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
+      stopCamera();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [startCamera, stopCamera]);
 
-  const capture = async () => {
+  const capture = useCallback(async (source: "manual" | "auto" = "manual", existingResult?: any) => {
     const v = videoRef.current;
     if (!v || status !== "ready") return;
-    if (v.readyState < 2 || v.paused) {
+    if (captureLockRef.current) return;
+    if (v.readyState < 2 || v.paused || v.videoWidth === 0) {
       toast.error("Camera not ready yet");
       return;
     }
+    captureLockRef.current = true;
     setCapturing(true);
     try {
       // ensure models are loaded before detecting
       await loadFaceModels();
-      const result = await detectSingleFace(v);
+      setModelsReady(true);
+      const result = existingResult ?? (await detectSingleFace(v));
       if (!result) {
-        toast.error("No face detected. Look straight at the camera.");
+        if (source === "manual") toast.error("No face detected. Look straight at the camera.");
       } else {
+        const image = captureFaceImage(v, result);
+        if (image) setFaceImage(image);
         setDescriptors((d) => [...d, Array.from(result.descriptor)]);
-        toast.success(`Captured sample ${descriptors.length + 1}`);
+        toast.success(source === "auto" ? "Face auto-captured" : `Captured sample ${descriptorsCountRef.current + 1}`);
       }
     } catch (e: any) {
       const msg = String(e?.message ?? e);
@@ -290,8 +375,69 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       console.error("Face capture error:", e);
     } finally {
       setCapturing(false);
+      captureLockRef.current = false;
+      countdownStartedRef.current = null;
+      setCountdown(null);
     }
-  };
+  }, [status]);
+
+  useEffect(() => {
+    if (status !== "ready") return;
+    let cancelled = false;
+
+    loadFaceModels()
+      .then(() => {
+        if (cancelled || status !== "ready") return;
+        setModelsReady(true);
+        setFaceHint("Center your face");
+        drawFaceBox();
+        detectionLoopRef.current = window.setInterval(async () => {
+          const v = videoRef.current;
+          if (!v || v.readyState < 2 || v.paused || v.videoWidth === 0 || captureLockRef.current) return;
+          try {
+            const result = await detectSingleFace(v);
+            const box = result?.detection?.box;
+            drawFaceBox(box);
+            if (!result) {
+              countdownStartedRef.current = null;
+              setCountdown(null);
+              setFaceHint("No face detected");
+              return;
+            }
+            if (!isFaceCentered(v, result)) {
+              countdownStartedRef.current = null;
+              setCountdown(null);
+              setFaceHint("Move closer and center your face");
+              return;
+            }
+            setFaceHint("Hold still");
+            const now = Date.now();
+            if (!countdownStartedRef.current) countdownStartedRef.current = now;
+            const elapsed = now - countdownStartedRef.current;
+            setCountdown(Math.max(1, Math.ceil((3000 - elapsed) / 1000)));
+            if (elapsed >= 3000 && now - lastAutoCaptureRef.current > 5000) {
+              lastAutoCaptureRef.current = now;
+              await capture("auto", result);
+            }
+          } catch (error) {
+            console.error("Face detection loop error:", error);
+          }
+        }, 300);
+      })
+      .catch((error) => {
+        console.error("Face model load error:", error);
+        setFaceHint("Face model failed to load");
+        toast.error("Face detection engine could not start");
+      });
+
+    return () => {
+      cancelled = true;
+      if (detectionLoopRef.current) {
+        window.clearInterval(detectionLoopRef.current);
+        detectionLoopRef.current = null;
+      }
+    };
+  }, [capture, drawFaceBox, status]);
 
   const save = async () => {
     try {
@@ -301,14 +447,16 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       return toast.error(err.errors?.[0]?.message ?? "Invalid input");
     }
     if (descriptors.length < 1) return toast.error("Capture at least 1 face sample");
+    if (!faceImage) return toast.error("Capture a face photo before saving");
 
     setSaving(true);
     const { error } = await supabase.from("employees").insert({
       name: name.trim(),
       email: email.trim() || null,
       face_descriptors: descriptors,
+      face_image: faceImage,
       created_by: (await supabase.auth.getUser()).data.user?.id,
-    });
+    } as any);
     setSaving(false);
     if (error) return toast.error(error.message);
     toast.success("Employee registered");
@@ -323,9 +471,9 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
 
   const statusLabel =
     status === "loading"
-      ? "Loading camera…"
+      ? "Starting camera..."
       : status === "ready"
-        ? "Camera started"
+        ? "Camera ready"
         : status === "denied"
           ? "Permission denied"
           : status === "error"
@@ -367,12 +515,21 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             playsInline
             autoPlay
           />
+          <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 h-full w-full object-cover" />
+          {status === "ready" && (
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center justify-between gap-3">
+              <Badge variant="secondary" className="font-mono">
+                {modelsReady ? faceHint : "Starting face detection..."}
+              </Badge>
+              {countdown !== null && <Badge className="text-lg font-bold">{countdown}</Badge>}
+            </div>
+          )}
           {status !== "ready" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 p-4 text-center text-sm text-muted-foreground">
               {status === "loading" ? (
                 <>
                   <Loader2 className="h-6 w-6 animate-spin" />
-                  <span>Loading camera…</span>
+                  <span>Starting camera...</span>
                 </>
               ) : status === "denied" ? (
                 <>
@@ -419,7 +576,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             </Button>
           )}
           <Button
-            onClick={capture}
+            onClick={() => capture("manual")}
             disabled={status !== "ready" || capturing}
             variant="secondary"
             className="gap-2"
@@ -428,7 +585,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             Capture sample
           </Button>
           {descriptors.length > 0 && (
-            <Button variant="ghost" onClick={() => setDescriptors([])} className="gap-1">
+            <Button variant="ghost" onClick={() => { setDescriptors([]); setFaceImage(null); }} className="gap-1">
               <X className="h-4 w-4" /> Clear
             </Button>
           )}
@@ -436,7 +593,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             <Button variant="ghost" onClick={handleClose}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving || descriptors.length === 0}>
+            <Button onClick={save} disabled={saving || descriptors.length === 0 || !faceImage}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save
             </Button>
           </div>
