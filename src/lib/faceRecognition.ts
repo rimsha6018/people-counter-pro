@@ -50,7 +50,7 @@ export async function detectFaces(input: HTMLVideoElement | HTMLCanvasElement | 
 
 export async function detectSingleFace(input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement) {
   return faceapi
-    .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 }))
+    .detectSingleFace(input, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
     .withFaceLandmarks()
     .withFaceDescriptor();
 }
