@@ -159,6 +159,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const captureLockRef = useRef(false);
   const lastAutoCaptureRef = useRef(0);
   const countdownStartedRef = useRef<number | null>(null);
+  const descriptorsCountRef = useRef(0);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [descriptors, setDescriptors] = useState<number[][]>([]);
@@ -201,14 +202,15 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = "hsl(142 76% 36%)";
+    const styles = getComputedStyle(document.documentElement);
+    ctx.strokeStyle = `hsl(${styles.getPropertyValue("--primary")})`;
     ctx.lineWidth = Math.max(4, canvas.width / 180);
     ctx.setLineDash([18, 10]);
     const guideSize = Math.min(canvas.width, canvas.height) * 0.55;
     ctx.strokeRect((canvas.width - guideSize) / 2, (canvas.height - guideSize) / 2, guideSize, guideSize);
     ctx.setLineDash([]);
     if (!box) return;
-    ctx.strokeStyle = "hsl(210 100% 56%)";
+    ctx.strokeStyle = `hsl(${styles.getPropertyValue("--accent")})`;
     ctx.lineWidth = Math.max(5, canvas.width / 160);
     ctx.strokeRect(box.x, box.y, box.width, box.height);
   }, []);
@@ -249,6 +251,10 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     }
     if (mountedRef.current) setStatus("idle");
   }, [clearOverlay]);
+
+  useEffect(() => {
+    descriptorsCountRef.current = descriptors.length;
+  }, [descriptors.length]);
 
   const waitForVideo = (video: HTMLVideoElement) =>
     new Promise<void>((resolve) => {
