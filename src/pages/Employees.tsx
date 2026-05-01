@@ -170,17 +170,31 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [countdown, setCountdown] = useState<number | null>(null);
   const [faceHint, setFaceHint] = useState("Center your face");
 
-  const stopCamera = () => {
+  const clearOverlay = useCallback(() => {
+    const canvas = overlayRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
+  const stopCamera = useCallback(() => {
+    if (detectionLoopRef.current) {
+      window.clearInterval(detectionLoopRef.current);
+      detectionLoopRef.current = null;
+    }
+    countdownStartedRef.current = null;
+    setCountdown(null);
+    clearOverlay();
     const s = streamRef.current;
     if (s) {
       s.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
     if (videoRef.current) {
+      videoRef.current.pause();
       videoRef.current.srcObject = null;
     }
     if (mountedRef.current) setStatus("idle");
-  };
+  }, [clearOverlay]);
 
   const startCamera = async () => {
     // Must run synchronously from a user gesture (or at mount) — no awaits before getUserMedia.
