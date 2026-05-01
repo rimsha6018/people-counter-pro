@@ -271,8 +271,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     }
     setCapturing(true);
     try {
-      // small delay to make sure face-api gets a fresh frame
-      await new Promise((r) => setTimeout(r, 120));
+      // ensure models are loaded before detecting
+      await loadFaceModels();
       const result = await detectSingleFace(v);
       if (!result) {
         toast.error("No face detected. Look straight at the camera.");
