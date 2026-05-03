@@ -233,8 +233,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       .then((result) => {
         if (!mountedRef.current) return;
         if (!result) {
-          toast.error("Photo captured, but no face descriptor was created. Try one more sample.");
-          setFaceHint("Try one more sample");
+          setFaceHint("Photo ready — recognition will improve with another sample");
           return;
         }
         setDescriptors((d) => [...d, Array.from(result)]);
@@ -244,8 +243,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       .catch((e: unknown) => {
         if (!mountedRef.current) return;
         console.error("Face descriptor processing error:", e);
-        setFaceHint("Photo saved — capture another angle");
-        toast.error("Photo captured, but face recognition processing is still warming up. Capture one more sample.");
+        setFaceHint("Photo ready — save now or capture another angle");
       })
       .finally(() => {
         if (!mountedRef.current) return;
@@ -440,7 +438,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
 
       setFaceImage(image);
       setFaceHint("Photo captured");
-      toast.success(source === "auto" ? "Photo auto-captured" : "Photo captured — processing sample");
+      toast.success(source === "auto" ? "Photo auto-captured — ready to save" : "Photo captured — ready to save");
       queueDescriptorProcessing(faceCrop, source);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
