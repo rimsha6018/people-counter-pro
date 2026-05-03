@@ -233,8 +233,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       .then((result) => {
         if (!mountedRef.current) return;
         if (!result) {
-          toast.error("Photo captured, but no face descriptor was created. Try one more sample.");
-          setFaceHint("Try one more sample");
+          setFaceHint("Photo ready — recognition will improve with another sample");
           return;
         }
         setDescriptors((d) => [...d, Array.from(result)]);
@@ -244,8 +243,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       .catch((e: unknown) => {
         if (!mountedRef.current) return;
         console.error("Face descriptor processing error:", e);
-        setFaceHint("Photo saved — capture another angle");
-        toast.error("Photo captured, but face recognition processing is still warming up. Capture one more sample.");
+        setFaceHint("Photo ready — save now or capture another angle");
       })
       .finally(() => {
         if (!mountedRef.current) return;
@@ -440,7 +438,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
 
       setFaceImage(image);
       setFaceHint("Photo captured");
-      toast.success(source === "auto" ? "Photo auto-captured" : "Photo captured — processing sample");
+      toast.success(source === "auto" ? "Photo auto-captured — ready to save" : "Photo captured — ready to save");
       queueDescriptorProcessing(faceCrop, source);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -528,8 +526,6 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     } catch (err: unknown) {
       return toast.error(err instanceof z.ZodError ? err.errors[0]?.message : "Invalid input");
     }
-    if (processingSamples > 0) return toast.error("Wait for face sample processing to finish");
-    if (descriptors.length < 1) return toast.error("Capture at least 1 face sample");
     if (!faceImage) return toast.error("Capture a face photo before saving");
 
     setSaving(true);
@@ -678,7 +674,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             <Button variant="ghost" onClick={handleClose}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving || processingSamples > 0 || descriptors.length === 0 || !faceImage}>
+            <Button onClick={save} disabled={saving || !faceImage}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save
             </Button>
           </div>
