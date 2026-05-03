@@ -528,8 +528,6 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     } catch (err: unknown) {
       return toast.error(err instanceof z.ZodError ? err.errors[0]?.message : "Invalid input");
     }
-    if (processingSamples > 0) return toast.error("Wait for face sample processing to finish");
-    if (descriptors.length < 1) return toast.error("Capture at least 1 face sample");
     if (!faceImage) return toast.error("Capture a face photo before saving");
 
     setSaving(true);
@@ -678,7 +676,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             <Button variant="ghost" onClick={handleClose}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving || processingSamples > 0 || descriptors.length === 0 || !faceImage}>
+            <Button onClick={save} disabled={saving || !faceImage}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save
             </Button>
           </div>
