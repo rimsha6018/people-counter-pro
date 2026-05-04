@@ -162,104 +162,81 @@ export default function EmployeesPage() {
 }
 
 type CameraStatus = "idle" | "loading" | "ready" | "error" | "denied";
-type BoxLike = { x: number; y: number; width: number; height: number };
-type FaceDetectionLike = { box?: BoxLike; detection?: { box?: BoxLike } };
 
-const getDetectionBox = (detection?: FaceDetectionLike | null) => detection?.detection?.box ?? detection?.box;
+const POSE_SEQUENCE: PoseTarget[] = ["center", "left", "right"];
+const HOLD_MS = 900; // must keep quality OK this long before auto-capture
+const POST_CAPTURE_PAUSE_MS = 1500;
 
 function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(true);
-  const detectionLoopRef = useRef<number | null>(null);
-  const detectionBusyRef = useRef(false);
+  const rafRef = useRef<number | null>(null);
+  const analyzingRef = useRef(false);
   const captureLockRef = useRef(false);
-  const descriptorProcessingRef = useRef(false);
-  const lastFaceBoxRef = useRef<{ box: BoxLike; at: number } | null>(null);
-  const lastAutoCaptureRef = useRef(0);
-  const countdownStartedRef = useRef<number | null>(null);
-  const descriptorsCountRef = useRef(0);
+  const holdStartRef = useRef<number | null>(null);
+  const lastCaptureAtRef = useRef(0);
+  const poseIndexRef = useRef(0);
+  const lastSampleRef = useRef<FaceMeshSample | null>(null);
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [descriptors, setDescriptors] = useState<number[][]>([]);
   const [faceImage, setFaceImage] = useState<string | null>(null);
+  const [poseShots, setPoseShots] = useState<Record<PoseTarget, string | null>>({
+    center: null,
+    left: null,
+    right: null,
+  });
+  const [poseIndex, setPoseIndex] = useState(0);
   const [capturing, setCapturing] = useState(false);
   const [processingSamples, setProcessingSamples] = useState(0);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<CameraStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [modelsReady, setModelsReady] = useState(false);
-  const [countdown, setCountdown] = useState<number | null>(null);
-  const [faceHint, setFaceHint] = useState("Center your face");
+  const [hint, setHint] = useState("Starting camera…");
+  const [filter, setFilter] = useState<string>("none");
+  const [resolution, setResolution] = useState<string>("");
 
-  const createFaceCropCanvas = (source: HTMLVideoElement | HTMLCanvasElement, detection?: FaceDetectionLike | null) => {
+  // ---------------------- helpers ----------------------
+
+  const cropFaceCanvas = useCallback((video: HTMLVideoElement, sample: FaceMeshSample) => {
     const canvas = document.createElement("canvas");
     canvas.width = 360;
     canvas.height = 360;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-
-    const vw = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
-    const vh = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
-    const box = getDetectionBox(detection);
-    if (box && vw > 0 && vh > 0) {
-      const size = Math.min(Math.max(box.width, box.height) * 1.8, Math.min(vw, vh));
-      const sx = Math.max(0, Math.min(vw - size, box.x + box.width / 2 - size / 2));
-      const sy = Math.max(0, Math.min(vh - size, box.y + box.height / 2 - size / 2));
-      ctx.drawImage(source, sx, sy, size, size, 0, 0, canvas.width, canvas.height);
-    } else {
-      const size = Math.min(vw, vh);
-      ctx.drawImage(source, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, canvas.width, canvas.height);
-    }
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const box = sample.bbox;
+    const size = Math.min(Math.max(box.width, box.height) * 1.7, Math.min(vw, vh));
+    const sx = Math.max(0, Math.min(vw - size, box.x + box.width / 2 - size / 2));
+    const sy = Math.max(0, Math.min(vh - size, box.y + box.height / 2 - size / 2));
+    ctx.drawImage(video, sx, sy, size, size, 0, 0, canvas.width, canvas.height);
     return canvas;
-  };
+  }, []);
 
-  const makeDetectionSnapshot = (video: HTMLVideoElement) => {
-    const canvas = document.createElement("canvas");
-    const maxWidth = 360;
-    const scale = Math.min(1, maxWidth / Math.max(video.videoWidth, 1));
-    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas;
-  };
-
-  const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string) =>
-    Promise.race<T>([
-      promise,
-      new Promise<T>((_, reject) => window.setTimeout(() => reject(new Error(label)), ms)),
-    ]);
-
-  const queueDescriptorProcessing = useCallback((faceCrop: HTMLCanvasElement, source: "manual" | "auto") => {
-    descriptorProcessingRef.current = true;
-    setProcessingSamples((count) => count + 1);
-    setFaceHint("Photo captured — processing face sample...");
-    withTimeout(warmFaceRecognitionModel(), 10000, "Face model warmup timed out")
-      .then(() => withTimeout(computeFaceDescriptor(faceCrop), 6000, "Face descriptor timed out"))
-      .then((result) => {
-        if (!mountedRef.current) return;
-        if (!result) {
-          setFaceHint("Photo ready — recognition will improve with another sample");
-          return;
-        }
-        setDescriptors((d) => [...d, Array.from(result)]);
-        setFaceHint("Sample ready");
-        toast.success(source === "auto" ? "Face sample ready" : `Sample ${descriptorsCountRef.current + 1} ready`);
+  const queueDescriptor = useCallback((faceCrop: HTMLCanvasElement, pose: PoseTarget) => {
+    setProcessingSamples((c) => c + 1);
+    warmFaceRecognitionModel()
+      .then(() => computeFaceDescriptor(faceCrop))
+      .then((descriptor) => {
+        if (!mountedRef.current || !descriptor) return;
+        setDescriptors((d) => [...d, Array.from(descriptor)]);
+        toast.success(`${pose.toUpperCase()} sample ready`);
       })
-      .catch((e: unknown) => {
-        if (!mountedRef.current) return;
-        console.error("Face descriptor processing error:", e);
-        setFaceHint("Photo ready — save now or capture another angle");
+      .catch((e) => {
+        console.error("descriptor error", e);
+        if (mountedRef.current) toast.warning("Saved photo — recognition may be reduced");
       })
       .finally(() => {
-        if (!mountedRef.current) return;
-        setProcessingSamples((count) => Math.max(0, count - 1));
-        descriptorProcessingRef.current = false;
+        if (mountedRef.current) setProcessingSamples((c) => Math.max(0, c - 1));
       });
   }, []);
 
-  const drawFaceBox = useCallback((box?: BoxLike) => {
+  const drawOverlay = useCallback((sample: FaceMeshSample | null) => {
     const canvas = overlayRef.current;
     const video = videoRef.current;
     const ctx = canvas?.getContext("2d");
@@ -268,51 +245,63 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     canvas.height = video.videoHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const styles = getComputedStyle(document.documentElement);
-    ctx.strokeStyle = `hsl(${styles.getPropertyValue("--primary")})`;
-    ctx.lineWidth = Math.max(4, canvas.width / 180);
-    ctx.setLineDash([18, 10]);
-    const guideSize = Math.min(canvas.width, canvas.height) * 0.55;
-    ctx.strokeRect((canvas.width - guideSize) / 2, (canvas.height - guideSize) / 2, guideSize, guideSize);
-    ctx.setLineDash([]);
-    if (!box) return;
-    ctx.strokeStyle = `hsl(${styles.getPropertyValue("--accent")})`;
-    ctx.lineWidth = Math.max(5, canvas.width / 160);
-    ctx.strokeRect(box.x, box.y, box.width, box.height);
+    const primary = `hsl(${styles.getPropertyValue("--primary")})`;
+    const accent = `hsl(${styles.getPropertyValue("--accent")})`;
+    const success = `hsl(${styles.getPropertyValue("--success")})`;
+
+    // Center guide oval
+    ctx.save();
+    ctx.strokeStyle = primary;
+    ctx.lineWidth = Math.max(3, canvas.width / 240);
+    ctx.setLineDash([14, 10]);
+    const gw = Math.min(canvas.width, canvas.height) * 0.55;
+    const gh = gw * 1.25;
+    ctx.beginPath();
+    ctx.ellipse(canvas.width / 2, canvas.height / 2, gw / 2, gh / 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    if (!sample) return;
+
+    // Bbox
+    ctx.strokeStyle = sample.brightness < 55 ? accent : success;
+    ctx.lineWidth = Math.max(3, canvas.width / 220);
+    ctx.strokeRect(sample.bbox.x, sample.bbox.y, sample.bbox.width, sample.bbox.height);
+
+    // Landmarks (sub-sampled)
+    ctx.fillStyle = primary;
+    const lm = sample.landmarks;
+    const step = 4;
+    for (let i = 0; i < lm.length; i += step) {
+      const p = lm[i];
+      ctx.fillRect(p.x * canvas.width - 1, p.y * canvas.height - 1, 2, 2);
+    }
+    // Highlight key features
+    const keyIdx = [33, 133, 263, 362, 1, 13, 14, 78, 308, 152, 10];
+    ctx.fillStyle = accent;
+    for (const i of keyIdx) {
+      const p = lm[i];
+      if (!p) continue;
+      ctx.beginPath();
+      ctx.arc(p.x * canvas.width, p.y * canvas.height, Math.max(2, canvas.width / 320), 0, Math.PI * 2);
+      ctx.fill();
+    }
   }, []);
-
-  const isFaceCentered = (source: HTMLVideoElement | HTMLCanvasElement, detection: FaceDetectionLike | null | undefined) => {
-    const box = getDetectionBox(detection);
-    const width = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
-    const height = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
-    if (!box || width === 0 || height === 0) return false;
-    const centerX = box.x + box.width / 2;
-    const centerY = box.y + box.height / 2;
-    const withinX = Math.abs(centerX - width / 2) < width * 0.2;
-    const withinY = Math.abs(centerY - height / 2) < height * 0.22;
-    const bigEnough = box.width > width * 0.16 && box.height > height * 0.22;
-    return withinX && withinY && bigEnough;
-  };
-
-  const scaleBox = (box: BoxLike, from: HTMLCanvasElement, to: HTMLVideoElement) => ({
-    x: box.x * (to.videoWidth / from.width),
-    y: box.y * (to.videoHeight / from.height),
-    width: box.width * (to.videoWidth / from.width),
-    height: box.height * (to.videoHeight / from.height),
-  });
 
   const clearOverlay = useCallback(() => {
-    const canvas = overlayRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const c = overlayRef.current;
+    const ctx = c?.getContext("2d");
+    if (c && ctx) ctx.clearRect(0, 0, c.width, c.height);
   }, []);
 
+  // ---------------------- camera lifecycle ----------------------
+
   const stopCamera = useCallback(() => {
-    if (detectionLoopRef.current) {
-      window.clearInterval(detectionLoopRef.current);
-      detectionLoopRef.current = null;
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     }
-    countdownStartedRef.current = null;
-    if (mountedRef.current) setCountdown(null);
+    holdStartRef.current = null;
     clearOverlay();
     const s = streamRef.current;
     if (s) {
@@ -323,34 +312,17 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       videoRef.current.pause();
       videoRef.current.srcObject = null;
     }
-    if (mountedRef.current) setStatus("idle");
+    if (mountedRef.current) {
+      setStatus("idle");
+      setFilter("none");
+    }
   }, [clearOverlay]);
 
-  useEffect(() => {
-    descriptorsCountRef.current = descriptors.length;
-  }, [descriptors.length]);
-
-  const waitForVideo = (video: HTMLVideoElement) =>
-    new Promise<void>((resolve) => {
-      if (video.readyState >= 2 && video.videoWidth > 0) return resolve();
-      const done = () => resolve();
-      video.addEventListener("loadedmetadata", done, { once: true });
-      video.addEventListener("canplay", done, { once: true });
-      window.setTimeout(done, 1200);
-    });
-
   const startCamera = useCallback(async () => {
-    // Must run synchronously from a user gesture (or at mount) — no awaits before getUserMedia.
     setErrorMsg("");
     setStatus("loading");
+    setHint("Starting camera…");
 
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setStatus("error");
-      setErrorMsg("Camera API not supported in this browser.");
-      toast.error("Camera not supported");
-      return;
-    }
-    // HTTPS / localhost guard
     if (
       typeof window !== "undefined" &&
       window.location.protocol !== "https:" &&
@@ -359,17 +331,13 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     ) {
       setStatus("error");
       setErrorMsg("Camera requires HTTPS. Open this page over https:// or on localhost.");
-      toast.error("HTTPS required for camera");
       return;
     }
 
     if (streamRef.current) stopCamera();
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
+      const { stream, settings } = await openBestCamera();
       if (!mountedRef.current) {
         stream.getTracks().forEach((t) => t.stop());
         return;
@@ -381,20 +349,23 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         v.muted = true;
         v.playsInline = true;
         await v.play();
-        await waitForVideo(v);
+      }
+      if (settings.width && settings.height) {
+        setResolution(`${settings.width}×${settings.height}`);
       }
       setStatus("ready");
+      setHint("Look at the camera");
     } catch (err: unknown) {
-      const name = err instanceof DOMException ? err.name : "";
+      const errName = err instanceof DOMException ? err.name : "";
       let msg = "Could not start camera.";
-      if (name === "NotAllowedError" || name === "SecurityError") {
-        msg = "Permission denied. Allow camera access in your browser settings and try again.";
+      if (errName === "NotAllowedError" || errName === "SecurityError") {
+        msg = "Permission denied. Allow camera access and try again.";
         setStatus("denied");
-      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
-        msg = "No camera found on this device.";
+      } else if (errName === "NotFoundError" || errName === "OverconstrainedError") {
+        msg = "No compatible camera found.";
         setStatus("error");
-      } else if (name === "NotReadableError" || name === "AbortError") {
-        msg = "Camera is in use by another application. Close it and try again.";
+      } else if (errName === "NotReadableError" || errName === "AbortError") {
+        msg = "Camera is in use by another application.";
         setStatus("error");
       } else {
         setStatus("error");
@@ -404,13 +375,19 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     }
   }, [stopCamera]);
 
-  // Auto-start on mount + cleanup on unmount
+  // Init: warm everything up + auto-start
   useEffect(() => {
     mountedRef.current = true;
-    // Pre-warm face models in parallel so first capture isn't slow, without blocking camera startup.
-    loadFaceDetectionModel().catch(() => {});
     loadFaceModels().catch(() => {});
     warmFaceRecognitionModel().catch(() => {});
+    getFaceMesh()
+      .then(() => {
+        if (mountedRef.current) setModelsReady(true);
+      })
+      .catch((e) => {
+        console.error("FaceMesh init failed", e);
+        if (mountedRef.current) toast.error("Face detection engine failed to start");
+      });
     startCamera();
     return () => {
       mountedRef.current = false;
@@ -418,113 +395,133 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     };
   }, [startCamera, stopCamera]);
 
-  const capture = useCallback(async (source: "manual" | "auto" = "manual") => {
-    const v = videoRef.current;
-    if (!v || status !== "ready") return;
-    if (captureLockRef.current) return;
-    if (v.readyState < 2 || v.paused || v.videoWidth === 0) {
-      toast.error("Camera not ready yet");
+  // ---------------------- capture ----------------------
+
+  const performCapture = useCallback(
+    async (sample: FaceMeshSample, pose: PoseTarget) => {
+      const v = videoRef.current;
+      if (!v) return;
+      if (captureLockRef.current) return;
+      captureLockRef.current = true;
+      setCapturing(true);
+      try {
+        const crop = cropFaceCanvas(v, sample);
+        if (!crop) throw new Error("Crop failed");
+        const dataUrl = crop.toDataURL("image/jpeg", 0.9);
+        setPoseShots((s) => ({ ...s, [pose]: dataUrl }));
+        if (pose === "center") setFaceImage(dataUrl);
+        queueDescriptor(crop, pose);
+        toast.success(`${pose.toUpperCase()} captured`);
+
+        // Advance to next pose
+        const nextIndex = poseIndexRef.current + 1;
+        poseIndexRef.current = nextIndex;
+        setPoseIndex(nextIndex);
+        if (nextIndex >= POSE_SEQUENCE.length) {
+          setHint("All angles captured — review and save");
+        } else {
+          setHint(POSE_LABEL[POSE_SEQUENCE[nextIndex]]);
+        }
+      } catch (e) {
+        console.error(e);
+        toast.error("Capture failed");
+      } finally {
+        lastCaptureAtRef.current = Date.now();
+        holdStartRef.current = null;
+        setCapturing(false);
+        captureLockRef.current = false;
+      }
+    },
+    [cropFaceCanvas, queueDescriptor],
+  );
+
+  const manualCapture = useCallback(async () => {
+    if (!lastSampleRef.current) {
+      toast.error("No face detected yet");
       return;
     }
-    captureLockRef.current = true;
-    setCapturing(true);
-    try {
-      setFaceHint("Capturing sample...");
-      const snapshot = makeDetectionSnapshot(v);
-      const cachedBox = lastFaceBoxRef.current;
-      const freshCachedBox = cachedBox && Date.now() - cachedBox.at < 2000 ? cachedBox.box : undefined;
-      let cropDetection: FaceDetectionLike | undefined = freshCachedBox ? { box: freshCachedBox } : undefined;
+    const idx = poseIndexRef.current;
+    const pose = POSE_SEQUENCE[Math.min(idx, POSE_SEQUENCE.length - 1)];
+    await performCapture(lastSampleRef.current, pose);
+  }, [performCapture]);
 
-      if (!cropDetection) {
-        const quickResult = await withTimeout(detectFaceBox(snapshot), 900, "Face crop timed out").catch(() => null);
-        if (quickResult?.box) cropDetection = { box: quickResult.box };
-      }
-      const faceCrop = createFaceCropCanvas(snapshot, cropDetection);
-      if (!faceCrop) throw new Error("Could not capture image");
-      const image = faceCrop.toDataURL("image/jpeg", 0.82);
-
-      setFaceImage(image);
-      setFaceHint("Photo captured");
-      toast.success(source === "auto" ? "Photo auto-captured — ready to save" : "Photo captured — ready to save");
-      queueDescriptorProcessing(faceCrop, source);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("fetch") || msg.includes("403") || msg.includes("network")) {
-        toast.error("Failed to load face model. Check your internet connection.");
-      } else {
-        toast.error("Face capture failed");
-      }
-      console.error("Face capture error:", e);
-    } finally {
-      setCapturing(false);
-      captureLockRef.current = false;
-      countdownStartedRef.current = null;
-      setCountdown(null);
-    }
-  }, [queueDescriptorProcessing, status]);
+  // ---------------------- detection loop ----------------------
 
   useEffect(() => {
-    if (status !== "ready") return;
+    if (status !== "ready" || !modelsReady) return;
     let cancelled = false;
+    let lastTick = 0;
 
-    loadFaceDetectionModel()
-      .then(() => {
-        if (cancelled || status !== "ready") return;
-        setModelsReady(true);
-        setFaceHint("Center your face");
-        drawFaceBox();
-        detectionLoopRef.current = window.setInterval(async () => {
-          const v = videoRef.current;
-          if (!v || v.readyState < 2 || v.paused || v.videoWidth === 0 || captureLockRef.current || detectionBusyRef.current) return;
-          detectionBusyRef.current = true;
-          try {
-            const snapshot = makeDetectionSnapshot(v);
-            const result = await withTimeout(detectFaceBox(snapshot), 900, "Face detection timed out");
-            const box = result?.box;
-            if (box) lastFaceBoxRef.current = { box, at: Date.now() };
-            drawFaceBox(box ? scaleBox(box, snapshot, v) : undefined);
-            if (!result) {
-              countdownStartedRef.current = null;
-              setCountdown(null);
-              setFaceHint("No face detected");
-              return;
-            }
-            if (!isFaceCentered(snapshot, result)) {
-              countdownStartedRef.current = null;
-              setCountdown(null);
-              setFaceHint("Move closer and center your face");
-              return;
-            }
-            setFaceHint("Hold still");
-            const now = Date.now();
-            if (!countdownStartedRef.current) countdownStartedRef.current = now;
-            const elapsed = now - countdownStartedRef.current;
-            setCountdown(Math.max(1, Math.ceil((3000 - elapsed) / 1000)));
-            if (elapsed >= 3000 && now - lastAutoCaptureRef.current > 5000) {
-              lastAutoCaptureRef.current = now;
-              await capture("auto");
-            }
-          } catch (error) {
-            console.error("Face detection loop error:", error);
-          } finally {
-            detectionBusyRef.current = false;
-          }
-        }, 300);
-      })
-      .catch((error) => {
-        console.error("Face model load error:", error);
-        setFaceHint("Face model failed to load");
-        toast.error("Face detection engine could not start");
-      });
+    const tick = async (ts: number) => {
+      if (cancelled) return;
+      rafRef.current = requestAnimationFrame(tick);
+      // ~10fps mesh analysis is plenty for guidance
+      if (ts - lastTick < 100) return;
+      lastTick = ts;
+      const v = videoRef.current;
+      if (!v || v.readyState < 2 || v.paused || v.videoWidth === 0) return;
+      if (analyzingRef.current || captureLockRef.current) return;
+      analyzingRef.current = true;
+      try {
+        const sample = await analyzeFrame(v);
+        lastSampleRef.current = sample;
+        drawOverlay(sample);
 
-    return () => {
-      cancelled = true;
-      if (detectionLoopRef.current) {
-        window.clearInterval(detectionLoopRef.current);
-        detectionLoopRef.current = null;
+        // Auto-tune CSS filter from brightness
+        const f = autoTuneFilter(sample?.brightness ?? 0);
+        setFilter((prev) => (prev === f ? prev : f));
+
+        const idx = poseIndexRef.current;
+        if (idx >= POSE_SEQUENCE.length) {
+          setHint("All angles captured — review and save");
+          return;
+        }
+        const pose = POSE_SEQUENCE[idx];
+        const evalRes = evaluateQuality(sample, pose);
+        if (!evalRes.ok) {
+          holdStartRef.current = null;
+          setHint(evalRes.hint);
+          return;
+        }
+        // Quality OK — start / continue hold timer
+        const now = Date.now();
+        if (now - lastCaptureAtRef.current < POST_CAPTURE_PAUSE_MS) {
+          setHint("Get ready for next pose…");
+          return;
+        }
+        if (!holdStartRef.current) holdStartRef.current = now;
+        const held = now - holdStartRef.current;
+        if (held < HOLD_MS) {
+          setHint(`Hold still… ${Math.max(1, Math.ceil((HOLD_MS - held) / 300))}`);
+          return;
+        }
+        await performCapture(sample!, pose);
+      } catch (err) {
+        console.error("analyze error", err);
+      } finally {
+        analyzingRef.current = false;
       }
     };
-  }, [capture, drawFaceBox, status]);
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+  }, [status, modelsReady, drawOverlay, performCapture]);
+
+  // ---------------------- save / reset ----------------------
+
+  const resetCaptures = () => {
+    setDescriptors([]);
+    setFaceImage(null);
+    setPoseShots({ center: null, left: null, right: null });
+    poseIndexRef.current = 0;
+    setPoseIndex(0);
+    holdStartRef.current = null;
+    setHint("Look at the camera");
+  };
 
   const save = async () => {
     try {
@@ -533,7 +530,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     } catch (err: unknown) {
       return toast.error(err instanceof z.ZodError ? err.errors[0]?.message : "Invalid input");
     }
-    if (!faceImage) return toast.error("Capture a face photo before saving");
+    if (!faceImage) return toast.error("Capture at least the CENTER pose before saving");
 
     setSaving(true);
     const { error } = await supabase.from("employees").insert({
@@ -555,11 +552,13 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     onClose();
   };
 
+  // ---------------------- ui ----------------------
+
   const statusLabel =
     status === "loading"
-      ? "Starting camera..."
+      ? "Starting camera…"
       : status === "ready"
-        ? "Camera ready"
+        ? `Camera · ${resolution || "live"}`
         : status === "denied"
           ? "Permission denied"
           : status === "error"
@@ -573,12 +572,15 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         ? "bg-destructive text-destructive-foreground"
         : "bg-muted text-muted-foreground";
 
+  const completedPoses = POSE_SEQUENCE.filter((p) => poseShots[p]).length;
+  const allDone = completedPoses === POSE_SEQUENCE.length;
+
   return (
-    <DialogContent className="max-w-xl">
+    <DialogContent className="max-w-2xl">
       <DialogHeader>
         <DialogTitle>Register employee</DialogTitle>
         <DialogDescription>
-          Capture 3+ photos with slightly different angles for best recognition.
+          Guided multi-angle capture: face the camera, then turn left, then right.
         </DialogDescription>
       </DialogHeader>
       <div className="space-y-4">
@@ -596,18 +598,25 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
           <video
             ref={videoRef}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-cover transition-[filter] duration-300"
+            style={{ filter, transform: "scaleX(-1)" }}
             muted
             playsInline
             autoPlay
           />
-          <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 h-full w-full object-cover" />
+          <canvas
+            ref={overlayRef}
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+            style={{ transform: "scaleX(-1)" }}
+          />
           {status === "ready" && (
-            <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center justify-between gap-3">
-              <Badge variant="secondary" className="font-mono">
-                {modelsReady ? faceHint : "Starting face detection..."}
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center justify-between gap-2">
+              <Badge variant="secondary" className="font-mono text-xs">
+                {modelsReady ? hint : "Loading face engine…"}
               </Badge>
-              {countdown !== null && <Badge className="text-lg font-bold">{countdown}</Badge>}
+              <Badge className="font-mono text-xs">
+                {allDone ? "Ready to save" : `Step ${Math.min(poseIndex + 1, POSE_SEQUENCE.length)}/${POSE_SEQUENCE.length}: ${POSE_SEQUENCE[Math.min(poseIndex, POSE_SEQUENCE.length - 1)].toUpperCase()}`}
+              </Badge>
             </div>
           )}
           {status !== "ready" && (
@@ -615,7 +624,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
               {status === "loading" ? (
                 <>
                   <Loader2 className="h-6 w-6 animate-spin" />
-                  <span>Starting camera...</span>
+                  <span>Starting camera…</span>
                 </>
               ) : status === "denied" ? (
                 <>
@@ -635,12 +644,48 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
               )}
             </div>
           )}
-          <Badge className={`absolute left-3 top-3 font-mono ${statusTone}`}>{statusLabel}</Badge>
-          <Badge className="absolute right-3 top-3 font-mono">
+          <Badge className={`absolute left-3 top-3 font-mono text-xs ${statusTone}`}>{statusLabel}</Badge>
+          <Badge className="absolute right-3 top-3 font-mono text-xs">
             {processingSamples > 0
-              ? `${descriptors.length} sample${descriptors.length === 1 ? "" : "s"} · processing`
-              : `${descriptors.length} sample${descriptors.length === 1 ? "" : "s"}`}
+              ? `${descriptors.length}/${POSE_SEQUENCE.length} · processing`
+              : `${descriptors.length}/${POSE_SEQUENCE.length} samples`}
           </Badge>
+        </div>
+
+        {/* Pose progress thumbnails */}
+        <div className="grid grid-cols-3 gap-3">
+          {POSE_SEQUENCE.map((pose, i) => {
+            const shot = poseShots[pose];
+            const active = i === poseIndex && !allDone;
+            return (
+              <div
+                key={pose}
+                className={`relative overflow-hidden rounded-md border bg-muted/40 ${
+                  active ? "border-primary ring-2 ring-primary/40" : "border-border/60"
+                }`}
+              >
+                <div className="aspect-square w-full">
+                  {shot ? (
+                    <img src={shot} alt={pose} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+                      {POSE_LABEL[pose].replace("Slowly turn your head ", "").replace("Look straight at the camera", "FRONT")}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-1 px-2 py-1 text-[10px] uppercase">
+                  <span className="font-semibold">{pose}</span>
+                  {shot ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+                  ) : active ? (
+                    <span className="font-mono text-primary">now</span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -649,32 +694,23 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
               <PowerOff className="h-4 w-4" /> Stop camera
             </Button>
           ) : (
-            <Button
-              onClick={startCamera}
-              disabled={status === "loading"}
-              variant="outline"
-              className="gap-2"
-            >
-              {status === "loading" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Power className="h-4 w-4" />
-              )}
+            <Button onClick={startCamera} disabled={status === "loading"} variant="outline" className="gap-2">
+              {status === "loading" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />}
               Start camera
             </Button>
           )}
           <Button
-            onClick={() => capture("manual")}
-            disabled={status !== "ready" || capturing}
+            onClick={manualCapture}
+            disabled={status !== "ready" || capturing || allDone}
             variant="secondary"
             className="gap-2"
           >
             {capturing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Capture sample
+            Capture now
           </Button>
-          {(descriptors.length > 0 || faceImage) && (
-            <Button variant="ghost" onClick={() => { setDescriptors([]); setFaceImage(null); }} className="gap-1">
-              <X className="h-4 w-4" /> Clear
+          {(descriptors.length > 0 || faceImage || completedPoses > 0) && (
+            <Button variant="ghost" onClick={resetCaptures} className="gap-1">
+              <X className="h-4 w-4" /> Reset captures
             </Button>
           )}
           <div className="ml-auto flex gap-2">
@@ -690,3 +726,4 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     </DialogContent>
   );
 }
+
