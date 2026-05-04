@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Loader2, Plus, Power, PowerOff, Trash2, UserPlus, Video, X } from "lucide-react";
+import { Camera, CheckCircle2, Loader2, Plus, Power, PowerOff, Trash2, UserPlus, Video, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,11 +19,18 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   computeFaceDescriptor,
-  detectFaceBox,
-  loadFaceDetectionModel,
   loadFaceModels,
   warmFaceRecognitionModel,
 } from "@/lib/faceRecognition";
+import {
+  analyzeFrame,
+  evaluateQuality,
+  getFaceMesh,
+  POSE_LABEL,
+  type FaceMeshSample,
+  type PoseTarget,
+} from "@/lib/faceMesh";
+import { autoTuneFilter, openBestCamera } from "@/lib/cameraEnhance";
 
 interface Employee {
   id: string;
