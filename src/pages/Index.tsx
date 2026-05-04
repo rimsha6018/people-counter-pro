@@ -20,6 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { usePersonDetector, type DetectionFrame } from "@/hooks/usePersonDetector";
 import { DetectionOverlay } from "@/components/DetectionOverlay";
@@ -65,6 +66,11 @@ export default function Dashboard() {
   const [linePos, setLinePos] = useState(50); // percentage
   const [maxOccupancy, setMaxOccupancy] = useState(10);
   const [facesLoading, setFacesLoading] = useState(true);
+  const [trackInOut, setTrackInOut] = useState(true);
+  const trackInOutRef = useRef(true);
+  useEffect(() => {
+    trackInOutRef.current = trackInOut;
+  }, [trackInOut]);
 
   // Load face models + employees
   useEffect(() => {
@@ -109,9 +115,11 @@ export default function Dashboard() {
       // Update tracker
       const updated = trackerRef.current.update(frame.detections);
 
-      // Update line crossings
+      // Update line crossings (only when in/out tracking is enabled)
       lineCounterRef.current.setLine(videoLineY());
-      const crossings = lineCounterRef.current.update(updated);
+      const crossings = trackInOutRef.current
+        ? lineCounterRef.current.update(updated)
+        : { entered: [], exited: [] };
       if (crossings.entered.length || crossings.exited.length) {
         setInCount(lineCounterRef.current.totalIn);
         setOutCount(lineCounterRef.current.totalOut);
