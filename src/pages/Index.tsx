@@ -474,6 +474,26 @@ export default function Dashboard() {
               }}
             />
             <Separator orientation="vertical" className="mx-1 h-6" />
+            <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/40 px-3 py-1.5">
+              <Switch
+                id="track-inout"
+                checked={trackInOut}
+                onCheckedChange={(v) => {
+                  setTrackInOut(v);
+                  toast.success(v ? "In/Out tracking enabled" : "In/Out tracking disabled");
+                }}
+              />
+              <Label htmlFor="track-inout" className="cursor-pointer text-xs font-medium">
+                Track In/Out
+              </Label>
+              <Badge
+                variant={trackInOut ? "default" : "secondary"}
+                className="ml-1 text-[10px] uppercase"
+              >
+                {trackInOut ? "On" : "Off"}
+              </Badge>
+            </div>
+            <Separator orientation="vertical" className="mx-1 h-6" />
             <Button variant="ghost" onClick={handleResetMetrics}>Reset</Button>
             <Button variant="ghost" onClick={loadEmployees}>Refresh employees</Button>
           </div>
