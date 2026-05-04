@@ -408,9 +408,9 @@ export default function Dashboard() {
               <DetectionOverlay
                 videoRef={videoRef}
                 tracks={tracks}
-                lineY={videoLineY()}
-                inCount={inCount}
-                outCount={outCount}
+                lineY={trackInOut ? videoLineY() : undefined}
+                inCount={trackInOut ? inCount : undefined}
+                outCount={trackInOut ? outCount : undefined}
               />
             )}
             {active && videoReady && (
