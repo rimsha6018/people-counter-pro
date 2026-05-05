@@ -847,6 +847,5 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       </div>
     </DialogContent>
   );
-    }
-  };
+}
 
