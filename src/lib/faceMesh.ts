@@ -3,12 +3,69 @@
 // to gate captures and draw landmarks. The 128-d recognition descriptor is
 // still produced by face-api.js downstream.
 
-import { FaceMesh, type Results, type NormalizedLandmarkList } from "@mediapipe/face_mesh";
+// NOTE: We intentionally do NOT import from "@mediapipe/face_mesh" — its ESM
+// build doesn't expose `FaceMesh` as a constructor when bundled by Vite
+// (see "FaceMesh is not a constructor" error). Instead, load the official
+// UMD bundle from the CDN at runtime, which is the supported approach.
 
-const MEDIAPIPE_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619";
+type NormalizedLandmark = { x: number; y: number; z: number };
+export type NormalizedLandmarkList = NormalizedLandmark[];
+type Results = { multiFaceLandmarks?: NormalizedLandmarkList[] };
+type FaceMeshOptions = {
+  maxNumFaces?: number;
+  refineLandmarks?: boolean;
+  minDetectionConfidence?: number;
+  minTrackingConfidence?: number;
+};
+type FaceMeshLike = {
+  setOptions: (o: FaceMeshOptions) => void;
+  onResults: (cb: (r: Results) => void) => void;
+  send: (input: { image: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement }) => Promise<void>;
+  initialize?: () => Promise<void>;
+};
+type FaceMeshCtor = new (cfg: { locateFile: (file: string) => string }) => FaceMeshLike;
 
-let meshInstance: FaceMesh | null = null;
-let meshReady: Promise<FaceMesh> | null = null;
+const MEDIAPIPE_VERSION = "0.4.1633559619";
+const MEDIAPIPE_CDN = `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@${MEDIAPIPE_VERSION}`;
+const MEDIAPIPE_SCRIPT = `${MEDIAPIPE_CDN}/face_mesh.js`;
+
+let meshInstance: FaceMeshLike | null = null;
+let meshReady: Promise<FaceMeshLike> | null = null;
+let scriptPromise: Promise<FaceMeshCtor> | null = null;
+
+const loadFaceMeshScript = (): Promise<FaceMeshCtor> => {
+  if (scriptPromise) return scriptPromise;
+  scriptPromise = new Promise<FaceMeshCtor>((resolve, reject) => {
+    if (typeof window === "undefined") {
+      reject(new Error("FaceMesh requires a browser environment"));
+      return;
+    }
+    const w = window as unknown as { FaceMesh?: FaceMeshCtor };
+    if (w.FaceMesh) {
+      resolve(w.FaceMesh);
+      return;
+    }
+    const existing = document.querySelector<HTMLScriptElement>(`script[data-facemesh="1"]`);
+    const script = existing ?? document.createElement("script");
+    script.onload = () => {
+      const ctor = (window as unknown as { FaceMesh?: FaceMeshCtor }).FaceMesh;
+      if (ctor) resolve(ctor);
+      else reject(new Error("FaceMesh global not available after script load"));
+    };
+    script.onerror = () => reject(new Error("Failed to load FaceMesh from CDN"));
+    if (!existing) {
+      script.src = MEDIAPIPE_SCRIPT;
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.dataset.facemesh = "1";
+      document.head.appendChild(script);
+    }
+  }).catch((err) => {
+    scriptPromise = null;
+    throw err;
+  });
+  return scriptPromise;
+};
 
 export type FaceMeshSample = {
   landmarks: NormalizedLandmarkList;
