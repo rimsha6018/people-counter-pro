@@ -717,124 +717,180 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
           </div>
         </div>
 
-        <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
-          <video
-            ref={videoRef}
-            className="h-full w-full object-cover transition-[filter] duration-300"
-            style={{ filter, transform: "scaleX(-1)" }}
-            muted
-            playsInline
-            autoPlay
-          />
-          <canvas
-            ref={overlayRef}
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-            style={{ transform: "scaleX(-1)" }}
-          />
-          {status === "ready" && (
-            <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center justify-between gap-2">
-              <Badge variant="secondary" className="font-mono text-xs">
-                {modelsReady ? hint : "Loading face engine…"}
-              </Badge>
-              <Badge className="font-mono text-xs">
-                {allDone ? "Ready to save" : `Step ${Math.min(poseIndex + 1, POSE_SEQUENCE.length)}/${POSE_SEQUENCE.length}: ${POSE_SEQUENCE[Math.min(poseIndex, POSE_SEQUENCE.length - 1)].toUpperCase()}`}
+        <Tabs value={mode} onValueChange={(v) => setMode(v as "camera" | "upload")}>
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="camera" className="gap-2"><Camera className="h-4 w-4" />Live capture</TabsTrigger>
+            <TabsTrigger value="upload" className="gap-2"><Upload className="h-4 w-4" />Upload image</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="camera" className="space-y-4">
+            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
+              <video
+                ref={videoRef}
+                className="h-full w-full object-cover transition-[filter] duration-300"
+                style={{ filter, transform: "scaleX(-1)" }}
+                muted
+                playsInline
+                autoPlay
+              />
+              <canvas
+                ref={overlayRef}
+                className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+                style={{ transform: "scaleX(-1)" }}
+              />
+              {status === "ready" && (
+                <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center justify-between gap-2">
+                  <Badge variant="secondary" className="font-mono text-xs">
+                    {modelsReady ? hint : "Loading face engine in background…"}
+                  </Badge>
+                  <Badge className="font-mono text-xs">
+                    {allDone ? "Ready to save" : `Step ${Math.min(poseIndex + 1, POSE_SEQUENCE.length)}/${POSE_SEQUENCE.length}: ${POSE_SEQUENCE[Math.min(poseIndex, POSE_SEQUENCE.length - 1)].toUpperCase()}`}
+                  </Badge>
+                </div>
+              )}
+              {status !== "ready" && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 p-4 text-center text-sm text-muted-foreground">
+                  {status === "loading" ? (
+                    <>
+                      <Loader2 className="h-6 w-6 animate-spin" />
+                      <span>Camera Engine Loading…</span>
+                    </>
+                  ) : status === "denied" ? (
+                    <>
+                      <PowerOff className="h-6 w-6 text-destructive" />
+                      <span>{errorMsg || "Permission denied"}</span>
+                    </>
+                  ) : status === "error" ? (
+                    <>
+                      <PowerOff className="h-6 w-6 text-destructive" />
+                      <span>{errorMsg || "Camera error"}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Video className="h-6 w-6" />
+                      <span>Camera stopped</span>
+                    </>
+                  )}
+                </div>
+              )}
+              <Badge className={`absolute left-3 top-3 font-mono text-xs ${statusTone}`}>{statusLabel}</Badge>
+              <Badge className="absolute right-3 top-3 font-mono text-xs">
+                {processingSamples > 0
+                  ? `${descriptors.length}/${POSE_SEQUENCE.length} · processing`
+                  : `${descriptors.length}/${POSE_SEQUENCE.length} samples`}
               </Badge>
             </div>
-          )}
-          {status !== "ready" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 p-4 text-center text-sm text-muted-foreground">
-              {status === "loading" ? (
-                <>
-                  <Loader2 className="h-6 w-6 animate-spin" />
-                  <span>Starting camera…</span>
-                </>
-              ) : status === "denied" ? (
-                <>
-                  <PowerOff className="h-6 w-6 text-destructive" />
-                  <span>{errorMsg || "Permission denied"}</span>
-                </>
-              ) : status === "error" ? (
-                <>
-                  <PowerOff className="h-6 w-6 text-destructive" />
-                  <span>{errorMsg || "Camera error"}</span>
-                </>
+
+            {/* Pose progress thumbnails */}
+            <div className="grid grid-cols-3 gap-3">
+              {POSE_SEQUENCE.map((pose, i) => {
+                const shot = poseShots[pose];
+                const active = i === poseIndex && !allDone;
+                return (
+                  <div
+                    key={pose}
+                    className={`relative overflow-hidden rounded-md border bg-muted/40 ${
+                      active ? "border-primary ring-2 ring-primary/40" : "border-border/60"
+                    }`}
+                  >
+                    <div className="aspect-square w-full">
+                      {shot ? (
+                        <img src={shot} alt={pose} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+                          {POSE_LABEL[pose].replace("Slowly turn your head ", "").replace("Look straight at the camera", "FRONT")}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between gap-1 px-2 py-1 text-[10px] uppercase">
+                      <span className="font-semibold">{pose}</span>
+                      {shot ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+                      ) : active ? (
+                        <span className="font-mono text-primary">now</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {status === "ready" ? (
+                <Button onClick={stopCamera} variant="outline" className="gap-2">
+                  <PowerOff className="h-4 w-4" /> Stop camera
+                </Button>
               ) : (
-                <>
-                  <Video className="h-6 w-6" />
-                  <span>Camera stopped</span>
-                </>
+                <Button onClick={startCamera} disabled={status === "loading"} variant="outline" className="gap-2">
+                  {status === "loading" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />}
+                  Start camera
+                </Button>
+              )}
+              <Button
+                onClick={manualCapture}
+                disabled={status !== "ready" || capturing || allDone}
+                variant="secondary"
+                className="gap-2"
+              >
+                {capturing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                Capture now
+              </Button>
+              {(descriptors.length > 0 || faceImage || completedPoses > 0) && (
+                <Button variant="ghost" onClick={resetCaptures} className="gap-1">
+                  <X className="h-4 w-4" /> Reset captures
+                </Button>
               )}
             </div>
-          )}
-          <Badge className={`absolute left-3 top-3 font-mono text-xs ${statusTone}`}>{statusLabel}</Badge>
-          <Badge className="absolute right-3 top-3 font-mono text-xs">
-            {processingSamples > 0
-              ? `${descriptors.length}/${POSE_SEQUENCE.length} · processing`
-              : `${descriptors.length}/${POSE_SEQUENCE.length} samples`}
-          </Badge>
-        </div>
+          </TabsContent>
 
-        {/* Pose progress thumbnails */}
-        <div className="grid grid-cols-3 gap-3">
-          {POSE_SEQUENCE.map((pose, i) => {
-            const shot = poseShots[pose];
-            const active = i === poseIndex && !allDone;
-            return (
-              <div
-                key={pose}
-                className={`relative overflow-hidden rounded-md border bg-muted/40 ${
-                  active ? "border-primary ring-2 ring-primary/40" : "border-border/60"
-                }`}
+          <TabsContent value="upload" className="space-y-4">
+            <div className="relative aspect-video w-full overflow-hidden rounded-lg border border-dashed border-border/60 bg-muted/30">
+              {faceImage ? (
+                <img src={faceImage} alt="Uploaded face" className="h-full w-full object-contain" />
+              ) : (
+                <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4 text-center text-sm text-muted-foreground">
+                  <Upload className="h-8 w-8 opacity-60" />
+                  <span>Upload a clear, well-lit photo (JPG / PNG, single face)</span>
+                </div>
+              )}
+              {uploadProcessing && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-sm text-foreground">
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Analyzing image…
+                </div>
+              )}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/jpg,image/png"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleUpload(f);
+                e.target.value = "";
+              }}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                className="gap-2"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadProcessing}
               >
-                <div className="aspect-square w-full">
-                  {shot ? (
-                    <img src={shot} alt={pose} className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-                      {POSE_LABEL[pose].replace("Slowly turn your head ", "").replace("Look straight at the camera", "FRONT")}
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center justify-between gap-1 px-2 py-1 text-[10px] uppercase">
-                  <span className="font-semibold">{pose}</span>
-                  {shot ? (
-                    <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
-                  ) : active ? (
-                    <span className="font-mono text-primary">now</span>
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                <Upload className="h-4 w-4" /> {faceImage ? "Re-upload image" : "Choose image"}
+              </Button>
+              {faceImage && (
+                <Button variant="ghost" onClick={resetCaptures} className="gap-1">
+                  <X className="h-4 w-4" /> Clear
+                </Button>
+              )}
+            </div>
+          </TabsContent>
+        </Tabs>
 
         <div className="flex flex-wrap items-center gap-2">
-          {status === "ready" ? (
-            <Button onClick={stopCamera} variant="outline" className="gap-2">
-              <PowerOff className="h-4 w-4" /> Stop camera
-            </Button>
-          ) : (
-            <Button onClick={startCamera} disabled={status === "loading"} variant="outline" className="gap-2">
-              {status === "loading" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />}
-              Start camera
-            </Button>
-          )}
-          <Button
-            onClick={manualCapture}
-            disabled={status !== "ready" || capturing || allDone}
-            variant="secondary"
-            className="gap-2"
-          >
-            {capturing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Capture now
-          </Button>
-          {(descriptors.length > 0 || faceImage || completedPoses > 0) && (
-            <Button variant="ghost" onClick={resetCaptures} className="gap-1">
-              <X className="h-4 w-4" /> Reset captures
-            </Button>
-          )}
           <div className="ml-auto flex gap-2">
             <Button variant="ghost" onClick={handleClose}>
               Cancel
