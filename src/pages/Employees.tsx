@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, CheckCircle2, Loader2, Plus, Power, PowerOff, Trash2, UserPlus, Video, X } from "lucide-react";
+import { Camera, CheckCircle2, Loader2, Plus, Power, PowerOff, Trash2, Upload, UserPlus, Video, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -19,6 +20,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   computeFaceDescriptor,
+  detectFaces,
   loadFaceModels,
   warmFaceRecognitionModel,
 } from "@/lib/faceRecognition";
