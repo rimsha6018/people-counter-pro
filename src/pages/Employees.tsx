@@ -198,9 +198,12 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const [status, setStatus] = useState<CameraStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [modelsReady, setModelsReady] = useState(false);
-  const [hint, setHint] = useState("Starting camera…");
+  const [hint, setHint] = useState("Camera Engine Loading…");
   const [filter, setFilter] = useState<string>("none");
   const [resolution, setResolution] = useState<string>("");
+  const [mode, setMode] = useState<"camera" | "upload">("camera");
+  const [uploadProcessing, setUploadProcessing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ---------------------- helpers ----------------------
 
