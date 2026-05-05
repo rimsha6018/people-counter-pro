@@ -402,7 +402,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         console.error("FaceMesh init failed", e);
         if (mountedRef.current) toast.error("Face detection engine failed to start");
       });
-    startCamera();
+    if (mode === "camera") startCamera();
     return () => {
       mountedRef.current = false;
       stopCamera();
