@@ -539,8 +539,110 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     poseIndexRef.current = 0;
     setPoseIndex(0);
     holdStartRef.current = null;
-    setHint("Look at the camera");
+    setHint(mode === "camera" ? "Look at the camera" : "Upload a clear face photo");
   };
+
+  // React to mode changes — stop or start camera accordingly
+  useEffect(() => {
+    if (mode === "camera") {
+      if (!streamRef.current) startCamera();
+    } else {
+      stopCamera();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  const handleUpload = async (file: File) => {
+    if (!file) return;
+    if (!/^image\/(jpeg|jpg|png)$/i.test(file.type)) {
+      return toast.error("Please upload a JPG or PNG image");
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      return toast.error("Image too large (max 8MB)");
+    }
+    setUploadProcessing(true);
+    try {
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(file);
+      });
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = () => reject(new Error("Could not read image"));
+        i.src = dataUrl;
+      });
+      // Draw to canvas for analysis
+      const max = 720;
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const cw = Math.round(img.width * scale);
+      const ch = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = cw;
+      canvas.height = ch;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas not available");
+      ctx.drawImage(img, 0, 0, cw, ch);
+
+      // Quality / face checks via MediaPipe
+      await getFaceMesh();
+      const sample = await analyzeFrame(canvas);
+      if (!sample) {
+        toast.error("No face detected — try another photo");
+        return;
+      }
+      if (sample.brightness < 55) {
+        toast.error("Image too dark — try a brighter photo");
+        return;
+      }
+      if (sample.sharpness < 30) {
+        toast.error("Image too blurry — upload a sharper photo");
+        return;
+      }
+      if (Math.abs(sample.centerOffset.x) > 0.45 || Math.abs(sample.centerOffset.y) > 0.45) {
+        toast.error("Face not centered — crop closer to the face");
+        return;
+      }
+
+      // Verify single face via face-api detector
+      await loadFaceModels();
+      const detections = await detectFaces(canvas);
+      if (detections.length === 0) {
+        toast.error("No face detected");
+        return;
+      }
+      if (detections.length > 1) {
+        toast.error("Multiple faces detected — upload a single-person photo");
+        return;
+      }
+
+      // Crop face for storage + descriptor
+      const crop = document.createElement("canvas");
+      crop.width = 360;
+      crop.height = 360;
+      const cctx = crop.getContext("2d")!;
+      const box = sample.bbox;
+      const size = Math.min(Math.max(box.width, box.height) * 1.7, Math.min(cw, ch));
+      const sx = Math.max(0, Math.min(cw - size, box.x + box.width / 2 - size / 2));
+      const sy = Math.max(0, Math.min(ch - size, box.y + box.height / 2 - size / 2));
+      cctx.drawImage(canvas, sx, sy, size, size, 0, 0, 360, 360);
+      const cropUrl = crop.toDataURL("image/jpeg", 0.92);
+
+      const descriptor = detections[0].descriptor;
+      setDescriptors([Array.from(descriptor)]);
+      setFaceImage(cropUrl);
+      setPoseShots({ center: cropUrl, left: null, right: null });
+      poseIndexRef.current = POSE_SEQUENCE.length;
+      setPoseIndex(POSE_SEQUENCE.length);
+      toast.success("Face extracted — ready to save");
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to process image");
+    } finally {
+      setUploadProcessing(false);
+    }
 
   const save = async () => {
     try {
