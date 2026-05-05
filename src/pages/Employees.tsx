@@ -643,6 +643,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     } finally {
       setUploadProcessing(false);
     }
+  };
 
   const save = async () => {
     try {
