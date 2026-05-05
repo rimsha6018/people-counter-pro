@@ -79,11 +79,12 @@ export type FaceMeshSample = {
   confidence: number; // 0..1
 };
 
-export async function getFaceMesh(): Promise<FaceMesh> {
+export async function getFaceMesh(): Promise<FaceMeshLike> {
   if (meshInstance) return meshInstance;
   if (meshReady) return meshReady;
   meshReady = (async () => {
-    const mesh = new FaceMesh({
+    const Ctor = await loadFaceMeshScript();
+    const mesh = new Ctor({
       locateFile: (file) => `${MEDIAPIPE_CDN}/${file}`,
     });
     mesh.setOptions({
@@ -92,7 +93,7 @@ export async function getFaceMesh(): Promise<FaceMesh> {
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6,
     });
-    await mesh.initialize();
+    if (mesh.initialize) await mesh.initialize();
     meshInstance = mesh;
     return mesh;
   })().catch((err) => {
