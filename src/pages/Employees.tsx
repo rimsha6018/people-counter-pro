@@ -323,7 +323,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const startCamera = useCallback(async () => {
     setErrorMsg("");
     setStatus("loading");
-    setHint("Starting camera…");
+    setHint("Camera Engine Loading…");
 
     if (
       typeof window !== "undefined" &&
@@ -350,13 +350,22 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         v.srcObject = stream;
         v.muted = true;
         v.playsInline = true;
-        await v.play();
+        v.autoplay = true;
+        // Flip to ready as soon as metadata is available — don't wait for play()
+        const onReady = () => {
+          if (!mountedRef.current) return;
+          if (settings.width && settings.height) {
+            setResolution(`${settings.width}×${settings.height}`);
+          } else if (v.videoWidth) {
+            setResolution(`${v.videoWidth}×${v.videoHeight}`);
+          }
+          setStatus("ready");
+          setHint("Look at the camera");
+        };
+        if (v.readyState >= 1) onReady();
+        else v.addEventListener("loadedmetadata", onReady, { once: true });
+        v.play().catch(() => {});
       }
-      if (settings.width && settings.height) {
-        setResolution(`${settings.width}×${settings.height}`);
-      }
-      setStatus("ready");
-      setHint("Look at the camera");
     } catch (err: unknown) {
       const errName = err instanceof DOMException ? err.name : "";
       let msg = "Could not start camera.";
