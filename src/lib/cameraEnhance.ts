@@ -8,10 +8,11 @@ export type CameraOpenResult = {
   settings: MediaTrackSettings;
 };
 
+// Prefer 720p for fast startup. 1080p is opportunistic only via upgrade.
 const VIDEO_CONSTRAINT_TIERS: MediaTrackConstraints[] = [
-  { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 60 } },
   { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
   { width: { ideal: 640 }, height: { ideal: 480 } },
+  {},
 ];
 
 export async function listVideoInputs(): Promise<MediaDeviceInfo[]> {
