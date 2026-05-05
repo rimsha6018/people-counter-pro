@@ -462,10 +462,16 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     if (status !== "ready" || !modelsReady) return;
     let cancelled = false;
     let lastTick = 0;
+    // Small warm-up delay before starting heavy detection — keeps the UI snappy
+    const armAt = performance.now() + 1500;
 
     const tick = async (ts: number) => {
       if (cancelled) return;
       rafRef.current = requestAnimationFrame(tick);
+      if (ts < armAt) {
+        setHint("Warming up detection…");
+        return;
+      }
       // ~10fps mesh analysis is plenty for guidance
       if (ts - lastTick < 100) return;
       lastTick = ts;
@@ -494,7 +500,6 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
           setHint(evalRes.hint);
           return;
         }
-        // Quality OK — start / continue hold timer
         const now = Date.now();
         if (now - lastCaptureAtRef.current < POST_CAPTURE_PAUSE_MS) {
           setHint("Get ready for next pose…");
