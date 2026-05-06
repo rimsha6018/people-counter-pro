@@ -761,7 +761,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
                   {status === "loading" ? (
                     <>
                       <Loader2 className="h-6 w-6 animate-spin" />
-                      <span>Camera Engine Loading…</span>
+                      <span>Starting camera…</span>
                     </>
                   ) : status === "denied" ? (
                     <>
