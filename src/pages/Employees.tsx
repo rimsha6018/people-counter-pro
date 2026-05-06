@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, CheckCircle2, Loader2, Plus, Power, PowerOff, Trash2, Upload, UserPlus, Video, X } from "lucide-react";
+import { Camera, Loader2, Plus, Power, PowerOff, Trash2, Upload, UserPlus, Video, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,14 +24,7 @@ import {
   loadFaceModels,
   warmFaceRecognitionModel,
 } from "@/lib/faceRecognition";
-import {
-  analyzeFrame,
-  evaluateQuality,
-  getFaceMesh,
-  POSE_LABEL,
-  type FaceMeshSample,
-  type PoseTarget,
-} from "@/lib/faceMesh";
+import { analyzeFrame, getFaceMesh, type FaceMeshSample } from "@/lib/faceMesh";
 import { autoTuneFilter, openBestCamera } from "@/lib/cameraEnhance";
 
 interface Employee {
@@ -165,10 +158,6 @@ export default function EmployeesPage() {
 
 type CameraStatus = "idle" | "loading" | "ready" | "error" | "denied";
 
-const POSE_SEQUENCE: PoseTarget[] = ["center", "left", "right"];
-const HOLD_MS = 900; // must keep quality OK this long before auto-capture
-const POST_CAPTURE_PAUSE_MS = 1500;
-
 function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -177,29 +166,18 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const rafRef = useRef<number | null>(null);
   const startingRef = useRef(false);
   const analyzingRef = useRef(false);
-  const captureLockRef = useRef(false);
-  const holdStartRef = useRef<number | null>(null);
-  const lastCaptureAtRef = useRef(0);
-  const poseIndexRef = useRef(0);
   const lastSampleRef = useRef<FaceMeshSample | null>(null);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [descriptors, setDescriptors] = useState<number[][]>([]);
   const [faceImage, setFaceImage] = useState<string | null>(null);
-  const [poseShots, setPoseShots] = useState<Record<PoseTarget, string | null>>({
-    center: null,
-    left: null,
-    right: null,
-  });
-  const [poseIndex, setPoseIndex] = useState(0);
   const [capturing, setCapturing] = useState(false);
-  const [processingSamples, setProcessingSamples] = useState(0);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<CameraStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [modelsReady, setModelsReady] = useState(false);
-  const [hint, setHint] = useState("Camera Engine Loading…");
+  const [hint, setHint] = useState("Look at the camera");
   const [filter, setFilter] = useState<string>("none");
   const [resolution, setResolution] = useState<string>("");
   const [mode, setMode] = useState<"camera" | "upload">("camera");
@@ -224,22 +202,20 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     return canvas;
   }, []);
 
-  const queueDescriptor = useCallback((faceCrop: HTMLCanvasElement, pose: PoseTarget) => {
-    setProcessingSamples((c) => c + 1);
-    warmFaceRecognitionModel()
-      .then(() => computeFaceDescriptor(faceCrop))
-      .then((descriptor) => {
-        if (!mountedRef.current || !descriptor) return;
-        setDescriptors((d) => [...d, Array.from(descriptor)]);
-        toast.success(`${pose.toUpperCase()} sample ready`);
-      })
-      .catch((e) => {
-        console.error("descriptor error", e);
-        if (mountedRef.current) toast.warning("Saved photo — recognition may be reduced");
-      })
-      .finally(() => {
-        if (mountedRef.current) setProcessingSamples((c) => Math.max(0, c - 1));
-      });
+  const cropFromVideoCenter = useCallback((video: HTMLVideoElement) => {
+    // Fallback crop when no face sample is available — center square
+    const canvas = document.createElement("canvas");
+    canvas.width = 360;
+    canvas.height = 360;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const size = Math.min(vw, vh);
+    const sx = (vw - size) / 2;
+    const sy = (vh - size) / 2;
+    ctx.drawImage(video, sx, sy, size, size, 0, 0, 360, 360);
+    return canvas;
   }, []);
 
   const drawOverlay = useCallback((sample: FaceMeshSample | null) => {
@@ -269,28 +245,16 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
 
     if (!sample) return;
 
-    // Bbox
     ctx.strokeStyle = sample.brightness < 55 ? accent : success;
     ctx.lineWidth = Math.max(3, canvas.width / 220);
     ctx.strokeRect(sample.bbox.x, sample.bbox.y, sample.bbox.width, sample.bbox.height);
 
-    // Landmarks (sub-sampled)
     ctx.fillStyle = primary;
     const lm = sample.landmarks;
     const step = 4;
     for (let i = 0; i < lm.length; i += step) {
       const p = lm[i];
       ctx.fillRect(p.x * canvas.width - 1, p.y * canvas.height - 1, 2, 2);
-    }
-    // Highlight key features
-    const keyIdx = [33, 133, 263, 362, 1, 13, 14, 78, 308, 152, 10];
-    ctx.fillStyle = accent;
-    for (const i of keyIdx) {
-      const p = lm[i];
-      if (!p) continue;
-      ctx.beginPath();
-      ctx.arc(p.x * canvas.width, p.y * canvas.height, Math.max(2, canvas.width / 320), 0, Math.PI * 2);
-      ctx.fill();
     }
   }, []);
 
@@ -307,7 +271,6 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    holdStartRef.current = null;
     clearOverlay();
     const s = streamRef.current;
     if (s) {
@@ -339,6 +302,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     ) {
       setStatus("error");
       setErrorMsg("Camera requires HTTPS. Open this page over https:// or on localhost.");
+      startingRef.current = false;
       return;
     }
 
@@ -355,7 +319,6 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         v.muted = true;
         v.playsInline = true;
         v.autoplay = true;
-        // Unlock the UI immediately after stream attachment; AI warms up separately.
         const onReady = () => {
           if (!mountedRef.current) return;
           if (settings.width && settings.height) {
@@ -364,9 +327,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             setResolution(`${v.videoWidth}×${v.videoHeight}`);
           }
           setStatus("ready");
-          setHint("Look at the camera");
+          setHint("Look at the camera, then click Capture");
         };
-        onReady();
         if (v.readyState >= 1) onReady();
         else {
           v.addEventListener("loadedmetadata", onReady, { once: true });
@@ -394,9 +356,9 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     } finally {
       startingRef.current = false;
     }
-  }, [stopCamera]);
+  }, []);
 
-  // Init: warm everything up + auto-start
+  // Init: warm models + auto-start camera (only in camera mode)
   useEffect(() => {
     mountedRef.current = true;
     loadFaceModels().catch(() => {});
@@ -407,122 +369,58 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       })
       .catch((e) => {
         console.error("FaceMesh init failed", e);
-        if (mountedRef.current) toast.error("Face detection engine failed to start");
       });
-    if (mode === "camera") startCamera();
     return () => {
       mountedRef.current = false;
       stopCamera();
     };
-  }, [startCamera, stopCamera, mode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // ---------------------- capture ----------------------
-
-  const performCapture = useCallback(
-    async (sample: FaceMeshSample, pose: PoseTarget) => {
-      const v = videoRef.current;
-      if (!v) return;
-      if (captureLockRef.current) return;
-      captureLockRef.current = true;
-      setCapturing(true);
-      try {
-        const crop = cropFaceCanvas(v, sample);
-        if (!crop) throw new Error("Crop failed");
-        const dataUrl = crop.toDataURL("image/jpeg", 0.9);
-        setPoseShots((s) => ({ ...s, [pose]: dataUrl }));
-        if (pose === "center") setFaceImage(dataUrl);
-        queueDescriptor(crop, pose);
-        toast.success(`${pose.toUpperCase()} captured`);
-
-        // Advance to next pose
-        const nextIndex = poseIndexRef.current + 1;
-        poseIndexRef.current = nextIndex;
-        setPoseIndex(nextIndex);
-        if (nextIndex >= POSE_SEQUENCE.length) {
-          setHint("All angles captured — review and save");
-        } else {
-          setHint(POSE_LABEL[POSE_SEQUENCE[nextIndex]]);
-        }
-      } catch (e) {
-        console.error(e);
-        toast.error("Capture failed");
-      } finally {
-        lastCaptureAtRef.current = Date.now();
-        holdStartRef.current = null;
-        setCapturing(false);
-        captureLockRef.current = false;
-      }
-    },
-    [cropFaceCanvas, queueDescriptor],
-  );
-
-  const manualCapture = useCallback(async () => {
-    if (!lastSampleRef.current) {
-      toast.error("No face detected yet");
-      return;
+  // React to mode changes
+  useEffect(() => {
+    if (mode === "camera") {
+      startCamera();
+    } else {
+      stopCamera();
     }
-    const idx = poseIndexRef.current;
-    const pose = POSE_SEQUENCE[Math.min(idx, POSE_SEQUENCE.length - 1)];
-    await performCapture(lastSampleRef.current, pose);
-  }, [performCapture]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
-  // ---------------------- detection loop ----------------------
+  // ---------------------- guidance loop (light) ----------------------
 
   useEffect(() => {
     if (status !== "ready") return;
     let cancelled = false;
     let lastTick = 0;
-    // Small warm-up delay before starting heavy detection — keeps the UI snappy
-    const armAt = performance.now() + 1500;
+    const armAt = performance.now() + 800;
 
     const tick = async (ts: number) => {
       if (cancelled) return;
       rafRef.current = requestAnimationFrame(tick);
-      if (ts < armAt) {
-        if (!modelsReady) setHint("Loading face engine in background…");
-        return;
-      }
+      if (ts < armAt) return;
       if (!modelsReady) return;
-      // ~10fps mesh analysis is plenty for guidance
-      if (ts - lastTick < 100) return;
+      if (ts - lastTick < 120) return;
       lastTick = ts;
       const v = videoRef.current;
       if (!v || v.readyState < 2 || v.paused || v.videoWidth === 0) return;
-      if (analyzingRef.current || captureLockRef.current) return;
+      if (analyzingRef.current) return;
       analyzingRef.current = true;
       try {
         const sample = await analyzeFrame(v);
         lastSampleRef.current = sample;
         drawOverlay(sample);
-
-        // Auto-tune CSS filter from brightness
         const f = autoTuneFilter(sample?.brightness ?? 0);
         setFilter((prev) => (prev === f ? prev : f));
-
-        const idx = poseIndexRef.current;
-        if (idx >= POSE_SEQUENCE.length) {
-          setHint("All angles captured — review and save");
-          return;
+        if (!sample) {
+          setHint("No face detected — face the camera");
+        } else if (sample.brightness < 55) {
+          setHint("Improve lighting");
+        } else if (Math.abs(sample.centerOffset.x) > 0.2 || Math.abs(sample.centerOffset.y) > 0.2) {
+          setHint("Align your face in frame");
+        } else {
+          setHint("Looking good — click Capture");
         }
-        const pose = POSE_SEQUENCE[idx];
-        const evalRes = evaluateQuality(sample, pose);
-        if (!evalRes.ok) {
-          holdStartRef.current = null;
-          setHint(evalRes.hint);
-          return;
-        }
-        const now = Date.now();
-        if (now - lastCaptureAtRef.current < POST_CAPTURE_PAUSE_MS) {
-          setHint("Get ready for next pose…");
-          return;
-        }
-        if (!holdStartRef.current) holdStartRef.current = now;
-        const held = now - holdStartRef.current;
-        if (held < HOLD_MS) {
-          setHint(`Hold still… ${Math.max(1, Math.ceil((HOLD_MS - held) / 300))}`);
-          return;
-        }
-        await performCapture(sample!, pose);
       } catch (err) {
         console.error("analyze error", err);
       } finally {
@@ -536,29 +434,52 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     };
-  }, [status, modelsReady, drawOverlay, performCapture]);
+  }, [status, modelsReady, drawOverlay]);
 
-  // ---------------------- save / reset ----------------------
+  // ---------------------- capture ----------------------
 
-  const resetCaptures = () => {
+  const handleCapture = useCallback(async () => {
+    const v = videoRef.current;
+    if (!v || v.videoWidth === 0) return toast.error("Camera not ready");
+    setCapturing(true);
+    try {
+      const sample = lastSampleRef.current;
+      const crop = sample ? cropFaceCanvas(v, sample) : cropFromVideoCenter(v);
+      if (!crop) throw new Error("Capture failed");
+      const dataUrl = crop.toDataURL("image/jpeg", 0.92);
+      setFaceImage(dataUrl);
+
+      // Compute descriptor (best-effort)
+      try {
+        await warmFaceRecognitionModel();
+        const desc = await computeFaceDescriptor(crop);
+        if (desc) {
+          setDescriptors([Array.from(desc)]);
+          toast.success("Face captured");
+        } else {
+          setDescriptors([]);
+          toast.warning("Saved photo — recognition may be reduced");
+        }
+      } catch (e) {
+        console.error(e);
+        setDescriptors([]);
+        toast.warning("Saved photo — recognition may be reduced");
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error("Capture failed");
+    } finally {
+      setCapturing(false);
+    }
+  }, [cropFaceCanvas, cropFromVideoCenter]);
+
+  const resetCapture = () => {
     setDescriptors([]);
     setFaceImage(null);
-    setPoseShots({ center: null, left: null, right: null });
-    poseIndexRef.current = 0;
-    setPoseIndex(0);
-    holdStartRef.current = null;
-    setHint(mode === "camera" ? "Look at the camera" : "Upload a clear face photo");
+    setHint(mode === "camera" ? "Look at the camera, then click Capture" : "Upload a clear face photo");
   };
 
-  // React to mode changes — stop or start camera accordingly
-  useEffect(() => {
-    if (mode === "camera") {
-      startCamera();
-    } else {
-      stopCamera();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+  // ---------------------- upload ----------------------
 
   const handleUpload = async (file: File) => {
     if (!file) return;
@@ -582,7 +503,6 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         i.onerror = () => reject(new Error("Could not read image"));
         i.src = dataUrl;
       });
-      // Draw to canvas for analysis
       const max = 720;
       const scale = Math.min(1, max / Math.max(img.width, img.height));
       const cw = Math.round(img.width * scale);
@@ -594,31 +514,10 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       if (!ctx) throw new Error("Canvas not available");
       ctx.drawImage(img, 0, 0, cw, ch);
 
-      // Quality / face checks via MediaPipe
-      await getFaceMesh();
-      const sample = await analyzeFrame(canvas);
-      if (!sample) {
-        toast.error("No face detected — try another photo");
-        return;
-      }
-      if (sample.brightness < 55) {
-        toast.error("Image too dark — try a brighter photo");
-        return;
-      }
-      if (sample.sharpness < 30) {
-        toast.error("Image too blurry — upload a sharper photo");
-        return;
-      }
-      if (Math.abs(sample.centerOffset.x) > 0.45 || Math.abs(sample.centerOffset.y) > 0.45) {
-        toast.error("Face not centered — crop closer to the face");
-        return;
-      }
-
-      // Verify single face via face-api detector
       await loadFaceModels();
       const detections = await detectFaces(canvas);
       if (detections.length === 0) {
-        toast.error("No face detected");
+        toast.error("No face detected — try another photo");
         return;
       }
       if (detections.length > 1) {
@@ -626,24 +525,20 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         return;
       }
 
-      // Crop face for storage + descriptor
+      const det = detections[0];
+      const box = det.detection?.box ?? { x: 0, y: 0, width: cw, height: ch };
       const crop = document.createElement("canvas");
       crop.width = 360;
       crop.height = 360;
       const cctx = crop.getContext("2d")!;
-      const box = sample.bbox;
       const size = Math.min(Math.max(box.width, box.height) * 1.7, Math.min(cw, ch));
       const sx = Math.max(0, Math.min(cw - size, box.x + box.width / 2 - size / 2));
       const sy = Math.max(0, Math.min(ch - size, box.y + box.height / 2 - size / 2));
       cctx.drawImage(canvas, sx, sy, size, size, 0, 0, 360, 360);
       const cropUrl = crop.toDataURL("image/jpeg", 0.92);
 
-      const descriptor = detections[0].descriptor;
-      setDescriptors([Array.from(descriptor)]);
+      setDescriptors([Array.from(det.descriptor)]);
       setFaceImage(cropUrl);
-      setPoseShots({ center: cropUrl, left: null, right: null });
-      poseIndexRef.current = POSE_SEQUENCE.length;
-      setPoseIndex(POSE_SEQUENCE.length);
       toast.success("Face extracted — ready to save");
     } catch (e) {
       console.error(e);
@@ -653,6 +548,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     }
   };
 
+  // ---------------------- save ----------------------
+
   const save = async () => {
     try {
       nameSchema.parse(name);
@@ -660,7 +557,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     } catch (err: unknown) {
       return toast.error(err instanceof z.ZodError ? err.errors[0]?.message : "Invalid input");
     }
-    if (!faceImage) return toast.error("Capture at least the CENTER pose before saving");
+    if (!faceImage) return toast.error("Capture or upload a face photo first");
 
     setSaving(true);
     const { error } = await supabase.from("employees").insert({
@@ -702,15 +599,12 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         ? "bg-destructive text-destructive-foreground"
         : "bg-muted text-muted-foreground";
 
-  const completedPoses = POSE_SEQUENCE.filter((p) => poseShots[p]).length;
-  const allDone = completedPoses === POSE_SEQUENCE.length;
-
   return (
     <DialogContent className="max-w-2xl">
       <DialogHeader>
         <DialogTitle>Register employee</DialogTitle>
         <DialogDescription>
-          Guided multi-angle capture: face the camera, then turn left, then right.
+          Capture a front-facing photo or upload one. One clear face is all we need.
         </DialogDescription>
       </DialogHeader>
       <div className="space-y-4">
@@ -727,8 +621,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
 
         <Tabs value={mode} onValueChange={(v) => setMode(v as "camera" | "upload")}>
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="camera" className="gap-2"><Camera className="h-4 w-4" />Live capture</TabsTrigger>
-            <TabsTrigger value="upload" className="gap-2"><Upload className="h-4 w-4" />Upload image</TabsTrigger>
+            <TabsTrigger value="camera" className="gap-2"><Camera className="h-4 w-4" />Camera</TabsTrigger>
+            <TabsTrigger value="upload" className="gap-2"><Upload className="h-4 w-4" />Upload</TabsTrigger>
           </TabsList>
 
           <TabsContent value="camera" className="space-y-4">
@@ -748,12 +642,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
               />
               {status === "ready" && (
                 <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center justify-between gap-2">
-                  <Badge variant="secondary" className="font-mono text-xs">
-                    {modelsReady ? hint : "Loading face engine in background…"}
-                  </Badge>
-                  <Badge className="font-mono text-xs">
-                    {allDone ? "Ready to save" : `Step ${Math.min(poseIndex + 1, POSE_SEQUENCE.length)}/${POSE_SEQUENCE.length}: ${POSE_SEQUENCE[Math.min(poseIndex, POSE_SEQUENCE.length - 1)].toUpperCase()}`}
-                  </Badge>
+                  <Badge variant="secondary" className="font-mono text-xs">{hint}</Badge>
+                  {faceImage && <Badge className="font-mono text-xs">Captured</Badge>}
                 </div>
               )}
               {status !== "ready" && (
@@ -782,48 +672,19 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
                 </div>
               )}
               <Badge className={`absolute left-3 top-3 font-mono text-xs ${statusTone}`}>{statusLabel}</Badge>
-              <Badge className="absolute right-3 top-3 font-mono text-xs">
-                {processingSamples > 0
-                  ? `${descriptors.length}/${POSE_SEQUENCE.length} · processing`
-                  : `${descriptors.length}/${POSE_SEQUENCE.length} samples`}
-              </Badge>
             </div>
 
-            {/* Pose progress thumbnails */}
-            <div className="grid grid-cols-3 gap-3">
-              {POSE_SEQUENCE.map((pose, i) => {
-                const shot = poseShots[pose];
-                const active = i === poseIndex && !allDone;
-                return (
-                  <div
-                    key={pose}
-                    className={`relative overflow-hidden rounded-md border bg-muted/40 ${
-                      active ? "border-primary ring-2 ring-primary/40" : "border-border/60"
-                    }`}
-                  >
-                    <div className="aspect-square w-full">
-                      {shot ? (
-                        <img src={shot} alt={pose} className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-                          {POSE_LABEL[pose].replace("Slowly turn your head ", "").replace("Look straight at the camera", "FRONT")}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-between gap-1 px-2 py-1 text-[10px] uppercase">
-                      <span className="font-semibold">{pose}</span>
-                      {shot ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
-                      ) : active ? (
-                        <span className="font-mono text-primary">now</span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            {faceImage && (
+              <div className="flex items-center gap-3 rounded-md border border-border/60 bg-muted/30 p-2">
+                <img src={faceImage} alt="Captured face" className="h-16 w-16 rounded object-cover" />
+                <div className="text-sm">
+                  <p className="font-medium">Captured photo</p>
+                  <p className="text-xs text-muted-foreground">
+                    {descriptors.length > 0 ? "Recognition data extracted" : "No descriptor — re-capture for better accuracy"}
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-wrap items-center gap-2">
               {status === "ready" ? (
@@ -837,17 +698,16 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
                 </Button>
               )}
               <Button
-                onClick={manualCapture}
-                disabled={status !== "ready" || capturing || allDone}
-                variant="secondary"
+                onClick={handleCapture}
+                disabled={status !== "ready" || capturing}
                 className="gap-2"
               >
                 {capturing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                Capture now
+                {faceImage ? "Re-capture" : "Capture"}
               </Button>
-              {(descriptors.length > 0 || faceImage || completedPoses > 0) && (
-                <Button variant="ghost" onClick={resetCaptures} className="gap-1">
-                  <X className="h-4 w-4" /> Reset captures
+              {faceImage && (
+                <Button variant="ghost" onClick={resetCapture} className="gap-1">
+                  <X className="h-4 w-4" /> Clear
                 </Button>
               )}
             </div>
@@ -890,7 +750,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
                 <Upload className="h-4 w-4" /> {faceImage ? "Re-upload image" : "Choose image"}
               </Button>
               {faceImage && (
-                <Button variant="ghost" onClick={resetCaptures} className="gap-1">
+                <Button variant="ghost" onClick={resetCapture} className="gap-1">
                   <X className="h-4 w-4" /> Clear
                 </Button>
               )}
@@ -903,7 +763,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
             <Button variant="ghost" onClick={handleClose}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving || !faceImage}>
+            <Button onClick={save} disabled={saving || !faceImage || !name.trim()}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save
             </Button>
           </div>
@@ -912,4 +772,3 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
     </DialogContent>
   );
 }
-
