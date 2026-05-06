@@ -469,7 +469,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   // ---------------------- detection loop ----------------------
 
   useEffect(() => {
-    if (status !== "ready" || !modelsReady) return;
+    if (status !== "ready") return;
     let cancelled = false;
     let lastTick = 0;
     // Small warm-up delay before starting heavy detection — keeps the UI snappy
@@ -479,9 +479,10 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       if (cancelled) return;
       rafRef.current = requestAnimationFrame(tick);
       if (ts < armAt) {
-        setHint("Warming up detection…");
+        if (!modelsReady) setHint("Loading face engine in background…");
         return;
       }
+      if (!modelsReady) return;
       // ~10fps mesh analysis is plenty for guidance
       if (ts - lastTick < 100) return;
       lastTick = ts;
