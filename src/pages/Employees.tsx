@@ -175,6 +175,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(true);
   const rafRef = useRef<number | null>(null);
+  const startingRef = useRef(false);
   const analyzingRef = useRef(false);
   const captureLockRef = useRef(false);
   const holdStartRef = useRef<number | null>(null);
@@ -324,9 +325,11 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   }, [clearOverlay]);
 
   const startCamera = useCallback(async () => {
+    if (startingRef.current || streamRef.current) return;
+    startingRef.current = true;
     setErrorMsg("");
     setStatus("loading");
-    setHint("Camera Engine Loading…");
+    setHint("Starting camera…");
 
     if (
       typeof window !== "undefined" &&
@@ -338,8 +341,6 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       setErrorMsg("Camera requires HTTPS. Open this page over https:// or on localhost.");
       return;
     }
-
-    if (streamRef.current) stopCamera();
 
     try {
       const { stream, settings } = await openBestCamera();
@@ -354,7 +355,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
         v.muted = true;
         v.playsInline = true;
         v.autoplay = true;
-        // Flip to ready as soon as metadata is available — don't wait for play()
+        // Unlock the UI immediately after stream attachment; AI warms up separately.
         const onReady = () => {
           if (!mountedRef.current) return;
           if (settings.width && settings.height) {
@@ -365,8 +366,12 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
           setStatus("ready");
           setHint("Look at the camera");
         };
+        onReady();
         if (v.readyState >= 1) onReady();
-        else v.addEventListener("loadedmetadata", onReady, { once: true });
+        else {
+          v.addEventListener("loadedmetadata", onReady, { once: true });
+          v.addEventListener("canplay", onReady, { once: true });
+        }
         v.play().catch(() => {});
       }
     } catch (err: unknown) {
@@ -386,6 +391,8 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       }
       setErrorMsg(msg);
       toast.error(msg);
+    } finally {
+      startingRef.current = false;
     }
   }, [stopCamera]);
 
