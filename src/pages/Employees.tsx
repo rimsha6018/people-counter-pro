@@ -414,7 +414,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
       mountedRef.current = false;
       stopCamera();
     };
-  }, [startCamera, stopCamera]);
+  }, [startCamera, stopCamera, mode]);
 
   // ---------------------- capture ----------------------
 
@@ -552,7 +552,7 @@ function RegisterDialog({ onClose, onCreated }: { onClose: () => void; onCreated
   // React to mode changes — stop or start camera accordingly
   useEffect(() => {
     if (mode === "camera") {
-      if (!streamRef.current) startCamera();
+      startCamera();
     } else {
       stopCamera();
     }
