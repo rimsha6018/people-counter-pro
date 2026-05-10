@@ -60,7 +60,7 @@ export function usePersonDetector({
         const m = await cocoSsd.load({ base: "lite_mobilenet_v2" });
         // Warm up to avoid first-inference jitter.
         try {
-          const dummy = tf.zeros([1, 320, 320, 3]) as tf.Tensor3D;
+          const dummy = tf.zeros([320, 320, 3]) as tf.Tensor3D;
           await m.detect(dummy as unknown as HTMLCanvasElement);
           dummy.dispose();
         } catch {}
