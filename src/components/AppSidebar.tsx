@@ -33,7 +33,12 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const { pathname } = useLocation();
-  const { signOut, user, isAdmin } = useAuth();
+  const { signOut, user, roles } = useAuth();
+  const label = roles.includes("admin")
+    ? "Admin"
+    : roles.includes("supervisor")
+      ? "Supervisor"
+      : "Viewer";
 
   return (
     <Sidebar collapsible="icon">
@@ -46,7 +51,7 @@ export function AppSidebar() {
             <div className="min-w-0">
               <p className="truncate text-sm font-bold">SentinelCount</p>
               <p className="truncate text-[10px] uppercase tracking-wider text-muted-foreground">
-                {isAdmin ? "Admin" : "User"}
+                {label}
               </p>
             </div>
           )}

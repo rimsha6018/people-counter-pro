@@ -37,12 +37,16 @@ export function usePersonDetector({
     detections: [],
     timestamp: Date.now(),
   });
+  const [inferenceMs, setInferenceMs] = useState(0);
+  const [detectFps, setDetectFps] = useState(0);
   const rafRef = useRef<number | null>(null);
   const lastRunRef = useRef(0);
+  const fpsFramesRef = useRef(0);
+  const fpsLastRef = useRef(performance.now());
   const onFrameRef = useRef(onFrame);
   onFrameRef.current = onFrame;
 
-  // Load model once
+  // Load model once, prefer WebGL, fallback to CPU.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -54,6 +58,12 @@ export function usePersonDetector({
           await tf.setBackend("cpu");
         }
         const m = await cocoSsd.load({ base: "lite_mobilenet_v2" });
+        // Warm up to avoid first-inference jitter.
+        try {
+          const dummy = tf.zeros([320, 320, 3]) as tf.Tensor3D;
+          await m.detect(dummy as unknown as HTMLCanvasElement);
+          dummy.dispose();
+        } catch {}
         if (!cancelled) {
           setModel(m);
           setLoading(false);
@@ -84,8 +94,17 @@ export function usePersonDetector({
 
     if (ready && now - lastRunRef.current >= intervalMs) {
       lastRunRef.current = now;
+      const t0 = performance.now();
       try {
         const predictions = await model.detect(video, 20);
+        const t1 = performance.now();
+        setInferenceMs(t1 - t0);
+        fpsFramesRef.current += 1;
+        if (t1 - fpsLastRef.current >= 1000) {
+          setDetectFps(Math.round((fpsFramesRef.current * 1000) / (t1 - fpsLastRef.current)));
+          fpsFramesRef.current = 0;
+          fpsLastRef.current = t1;
+        }
         const persons = predictions
           .filter((p) => p.class === "person" && p.score >= scoreThreshold)
           .map((p, i) => ({
@@ -117,5 +136,5 @@ export function usePersonDetector({
     };
   }, [enabled, model, detectLoop]);
 
-  return { loading, error, currentFrame, modelReady: !!model };
+  return { loading, error, currentFrame, modelReady: !!model, inferenceMs, detectFps };
 }
