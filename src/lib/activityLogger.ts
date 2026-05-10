@@ -18,13 +18,15 @@ export async function logActivity(
 ) {
   if (!userId) return;
   try {
-    await supabase.from("user_activity_logs").insert({
-      user_id: userId,
-      action,
-      details,
-      user_agent:
-        typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 240) : null,
-    });
+    await supabase.from("user_activity_logs").insert([
+      {
+        user_id: userId,
+        action,
+        details: details as never,
+        user_agent:
+          typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 240) : undefined,
+      },
+    ]);
   } catch (e) {
     console.warn("activity log failed", e);
   }
