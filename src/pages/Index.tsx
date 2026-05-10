@@ -294,10 +294,11 @@ export default function Dashboard() {
       setActive(true);
       setSource("webcam");
       toast.success("Camera activated");
+      if (user) logActivity(user.id, "camera_started");
     } catch (e) {
       toast.error("Camera access denied");
     }
-  }, [stopStream]);
+  }, [stopStream, user]);
 
   const startVideoFile = useCallback(
     async (file: File) => {
@@ -372,6 +373,7 @@ export default function Dashboard() {
           <Badge variant="outline" className="hidden gap-1 font-mono text-xs sm:inline-flex">
             <Zap className="h-3 w-3" /> COCO-SSD + face-api
           </Badge>
+          <AISettingsDrawer />
         </div>
       </div>
 
@@ -414,9 +416,11 @@ export default function Dashboard() {
               <DetectionOverlay
                 videoRef={videoRef}
                 tracks={tracks}
-                lineY={trackInOut ? videoLineY() : undefined}
+                lineY={trackInOut && settings.showLine ? videoLineY() : undefined}
                 inCount={trackInOut ? inCount : undefined}
                 outCount={trackInOut ? outCount : undefined}
+                showBoxes={settings.showBoxes}
+                showLabels={settings.showLabels}
               />
             )}
             {active && videoReady && (
@@ -581,6 +585,7 @@ export default function Dashboard() {
           </Card>
         </div>
       </div>
+      <PerformanceWidget detectFps={detectFps} inferenceMs={inferenceMs} trackedCount={tracks.length} />
     </div>
   );
 }
