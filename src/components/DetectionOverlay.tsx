@@ -4,12 +4,28 @@ import type { TrackedObject } from "@/lib/tracker";
 interface Props {
   videoRef: React.RefObject<HTMLVideoElement>;
   tracks: TrackedObject[];
-  lineY?: number; // in video pixel coords
+  lineY?: number;
   inCount?: number;
   outCount?: number;
+  showBoxes?: boolean;
+  showLabels?: boolean;
 }
 
-export function DetectionOverlay({ videoRef, tracks, lineY, inCount, outCount }: Props) {
+function fmtDuration(ms: number) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+export function DetectionOverlay({
+  videoRef,
+  tracks,
+  lineY,
+  inCount,
+  outCount,
+  showBoxes = true,
+  showLabels = true,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -33,7 +49,6 @@ export function DetectionOverlay({ videoRef, tracks, lineY, inCount, outCount }:
     const danger = `hsl(${root.getPropertyValue("--destructive").trim()})`;
     const success = `hsl(${root.getPropertyValue("--success").trim()})`;
 
-    // Virtual line
     if (typeof lineY === "number") {
       ctx.save();
       ctx.setLineDash([12, 8]);
@@ -47,65 +62,97 @@ export function DetectionOverlay({ videoRef, tracks, lineY, inCount, outCount }:
 
       const fontSize = Math.max(14, vw / 55);
       ctx.font = `700 ${fontSize}px Inter, system-ui, sans-serif`;
-      const inText = `IN ${inCount ?? 0}`;
-      const outText = `OUT ${outCount ?? 0}`;
       ctx.fillStyle = success;
-      ctx.fillText(inText, 16, lineY - 10);
+      ctx.fillText(`IN ${inCount ?? 0}`, 16, lineY - 10);
       ctx.fillStyle = danger;
-      ctx.fillText(outText, 16, lineY + fontSize + 6);
+      ctx.fillText(`OUT ${outCount ?? 0}`, 16, lineY + fontSize + 6);
     }
 
+    if (!showBoxes && !showLabels) return;
+
+    const now = Date.now();
     tracks.forEach((t) => {
       const [x, y, w, h] = t.bbox;
       const isUnknown = t.recognized === false;
       const color = isUnknown ? danger : primary;
       const glow = isUnknown ? danger : primaryGlow;
 
-      ctx.lineWidth = Math.max(2, vw / 400);
-      ctx.strokeStyle = color;
-      ctx.shadowColor = glow;
-      ctx.shadowBlur = 12;
-      ctx.strokeRect(x, y, w, h);
-      ctx.shadowBlur = 0;
+      if (showBoxes) {
+        ctx.lineWidth = Math.max(2, vw / 400);
+        ctx.strokeStyle = color;
+        ctx.shadowColor = glow;
+        ctx.shadowBlur = 12;
+        ctx.strokeRect(x, y, w, h);
+        ctx.shadowBlur = 0;
 
-      const cornerLen = Math.min(w, h) * 0.18;
-      ctx.lineWidth = Math.max(3, vw / 300);
-      ctx.strokeStyle = glow;
-      const cs: [number, number, number, number][] = [
-        [x, y, x + cornerLen, y],
-        [x, y, x, y + cornerLen],
-        [x + w, y, x + w - cornerLen, y],
-        [x + w, y, x + w, y + cornerLen],
-        [x, y + h, x + cornerLen, y + h],
-        [x, y + h, x, y + h - cornerLen],
-        [x + w, y + h, x + w - cornerLen, y + h],
-        [x + w, y + h, x + w, y + h - cornerLen],
-      ];
-      cs.forEach(([x1, y1, x2, y2]) => {
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-      });
+        const cornerLen = Math.min(w, h) * 0.18;
+        ctx.lineWidth = Math.max(3, vw / 300);
+        ctx.strokeStyle = glow;
+        const cs: [number, number, number, number][] = [
+          [x, y, x + cornerLen, y],
+          [x, y, x, y + cornerLen],
+          [x + w, y, x + w - cornerLen, y],
+          [x + w, y, x + w, y + cornerLen],
+          [x, y + h, x + cornerLen, y + h],
+          [x, y + h, x, y + h - cornerLen],
+          [x + w, y + h, x + w - cornerLen, y + h],
+          [x + w, y + h, x + w, y + h - cornerLen],
+        ];
+        cs.forEach(([x1, y1, x2, y2]) => {
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+        });
+      }
+
+      if (!showLabels) return;
 
       const fontSize = Math.max(12, vw / 60);
       ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`;
-      const label = t.employeeName
-        ? `#${t.id} ${t.employeeName}`
+      const baseLabel = t.employeeName
+        ? `${t.employeeName}`
         : isUnknown
-          ? `#${t.id} Unknown`
-          : `#${t.id} Person`;
-      const padding = fontSize * 0.4;
-      const metrics = ctx.measureText(label);
-      const textW = metrics.width + padding * 2;
-      const textH = fontSize + padding * 1.2;
+          ? `Unknown`
+          : `Employee #${t.id}`;
+      const subLabel = `#${t.id} · ${(t.score * 100).toFixed(0)}% · ${fmtDuration(now - t.firstSeenAt)}`;
 
+      const padding = fontSize * 0.4;
+      const m1 = ctx.measureText(baseLabel);
+      const m2Font = `400 ${Math.round(fontSize * 0.7)}px Inter, system-ui, sans-serif`;
+      ctx.font = m2Font;
+      const m2 = ctx.measureText(subLabel);
+      const textW = Math.max(m1.width, m2.width) + padding * 2;
+      const lineH = fontSize + Math.round(fontSize * 0.7) + padding * 1.6;
+
+      // Pill background
       ctx.fillStyle = color;
-      ctx.fillRect(x, Math.max(0, y - textH), textW, textH);
+      const radius = Math.min(8, fontSize * 0.5);
+      const ly = Math.max(0, y - lineH);
+      roundRect(ctx, x, ly, textW, lineH, radius);
+      ctx.fill();
+
       ctx.fillStyle = isUnknown ? "white" : "hsl(222 47% 8%)";
-      ctx.fillText(label, x + padding, Math.max(fontSize, y - padding));
+      ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`;
+      ctx.fillText(baseLabel, x + padding, ly + fontSize + padding * 0.2);
+      ctx.font = m2Font;
+      ctx.fillText(subLabel, x + padding, ly + fontSize + padding * 0.2 + Math.round(fontSize * 0.8));
     });
-  }, [tracks, videoRef, lineY, inCount, outCount]);
+  }, [tracks, videoRef, lineY, inCount, outCount, showBoxes, showLabels]);
 
   return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />;
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }
